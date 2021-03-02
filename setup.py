@@ -34,22 +34,17 @@ ENTRY_POINTS = {"console_scripts": ["openscm-zenodo = openscm_zenodo.cli:cli"]}
 
 REQUIREMENTS = ["click"]
 REQUIREMENTS_OPTIONAL = []
-REQUIREMENTS_TESTS = (
-    ["codecov", "pytest", "pytest-console-scripts", "pytest-cov"]
-    + REQUIREMENTS_OPTIONAL
-)
+REQUIREMENTS_TESTS = [
+    "codecov",
+    "pytest",
+    "pytest-console-scripts",
+    "pytest-cov",
+] + REQUIREMENTS_OPTIONAL
 REQUIREMENTS_DOCS = ["sphinx>2.1", "sphinx_rtd_theme"]
 REQUIREMENTS_DEPLOY = ["twine>=1.11.0", "setuptools>=41.2", "wheel>=0.31.0"]
 
 REQUIREMENTS_DEV = [
-    *[
-        "bandit",
-        "black==19.10b0",
-        "flake8",
-        "isort>=5",
-        "pydocstyle",
-        "pylint",
-    ],
+    *["bandit", "black==19.10b0", "flake8", "isort>=5", "pydocstyle", "pylint",],
     *REQUIREMENTS_OPTIONAL,
     *REQUIREMENTS_TESTS,
     *REQUIREMENTS_DOCS,

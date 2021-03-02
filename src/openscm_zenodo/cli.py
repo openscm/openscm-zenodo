@@ -5,9 +5,8 @@ import logging
 
 import click
 
-
-"str: Default format used for logging output"
 DEFAULT_LOG_FORMAT = "{process} {asctime} {levelname}:{name}:{message}"
+"""str: Default format used for logging output"""
 
 
 class ColorFormatter(logging.Formatter):
@@ -40,7 +39,7 @@ class ColorFormatter(logging.Formatter):
         str
             Formatted message string
         """
-        formatted_message = super(ColorFormatter, self).format(record)
+        formatted_message = super().format(record)
 
         if not record.exc_info:
             level = record.levelname.upper()
@@ -72,7 +71,7 @@ class ClickHandler(logging.Handler):
             msg = self.format(record)
             click.echo(msg, err=self._use_stderr)
 
-        except Exception:  # pragma: no cover
+        except Exception:  # pragma: no cover # pylint: disable=broad-except
             self.handleError(record)
 
 
