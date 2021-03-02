@@ -106,7 +106,7 @@ _zenodo_url = click.option(
     show_default=True,
     help="Zenodo server to which to upload.",
 )
-_token = click.option('--token', envvar='ZENODO_TOKEN')
+_token = click.option("--token", envvar="ZENODO_TOKEN")
 
 
 @cli.command(context_settings={"help_option_names": ["-h", "--help"]})
@@ -118,7 +118,10 @@ def create_new_version():
 
 
 @cli.command(context_settings={"help_option_names": ["-h", "--help"]})
-@click.argument("file_to_upload", type=click.Path(exists=True, readable=True, dir_okay=False, resolve_path=True))
+@click.argument(
+    "file_to_upload",
+    type=click.Path(exists=True, readable=True, dir_okay=False, resolve_path=True),
+)
 @click.argument("bucket")
 @_zenodo_url
 @_token
@@ -130,7 +133,9 @@ def upload(file_to_upload, bucket, zenodo_url, token):
     ``bucket``.
     """
     # TODO: test this function
-    upload_file(filepath=file_to_upload, bucket=bucket, zenodo_url=zenodo_url, token=token)
+    upload_file(
+        filepath=file_to_upload, bucket=bucket, zenodo_url=zenodo_url, token=token
+    )
 
 
 @cli.command(context_settings={"help_option_names": ["-h", "--help"]})
@@ -146,6 +151,8 @@ def get_bucket(deposition_id, zenodo_url, token):
     This command is handy when you know your deposition ID but you've
     forgotten the bucket address.
     """
-    bucket_id = get_bucket_id(deposition_id=deposition_id, zenodo_url=zenodo_url, token=token)
+    bucket_id = get_bucket_id(
+        deposition_id=deposition_id, zenodo_url=zenodo_url, token=token
+    )
 
     click.echo(bucket_id)

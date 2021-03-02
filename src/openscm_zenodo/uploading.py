@@ -7,21 +7,16 @@ for the progress bar.
 import logging
 import os
 import os.path
-import requests
 
+import requests
 from tqdm import tqdm
 from tqdm.utils import CallbackIOWrapper
-
 
 _LOGGER = logging.getLogger(__name__)
 
 
 """dict: Configuration for upload progress bar"""
-TQDM_KWARGS = dict(
-    unit="B",
-    unit_scale=True,
-    unit_divisor=1024,
-)
+TQDM_KWARGS = dict(unit="B", unit_scale=True, unit_divisor=1024,)
 
 
 def upload_file(filepath, bucket, zenodo_url, token):
@@ -46,21 +41,14 @@ def upload_file(filepath, bucket, zenodo_url, token):
     _LOGGER.info("Uploading %s to %s %s", filepath, bucket, zenodo_url)
 
     upload_url_no_token = "https://{}/api/files/{}/{}?access_token=".format(
-        zenodo_url,
-        bucket,
-        os.path.basename(filepath),
+        zenodo_url, bucket, os.path.basename(filepath),
     )
     _LOGGER.debug("Upload url: %s", upload_url_no_token)
-    upload_url = "{}{}".format(
-        upload_url_no_token,
-        token,
-    )
+    upload_url = "{}{}".format(upload_url_no_token, token,)
 
     file_size = os.stat(filepath).st_size
 
     with open(filepath, "rb") as file_handle:
         with tqdm(total=file_size, **TQDM_KWARGS) as tqdm_bar:
-            wrapped_file = CallbackIOWrapper(
-                tqdm_bar.update, file_handle, "read"
-            )
+            wrapped_file = CallbackIOWrapper(tqdm_bar.update, file_handle, "read")
             requests.put(upload_url, data=wrapped_file)
