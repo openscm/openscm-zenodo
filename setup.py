@@ -30,7 +30,9 @@ CLASSIFIERS = [
     "Programming Language :: Python :: 3.9",
 ]
 
-REQUIREMENTS = []
+ENTRY_POINTS = {"console_scripts": ["openscm-zenodo = openscm_zenodo.cli:cli"]}
+
+REQUIREMENTS = ["click"]
 REQUIREMENTS_OPTIONAL = []
 REQUIREMENTS_TESTS = (
     ["codecov", "pytest", "pytest-console-scripts", "pytest-cov"]
@@ -123,4 +125,5 @@ setup(
     install_requires=REQUIREMENTS,
     extras_require=REQUIREMENTS_EXTRAS,
     cmdclass=cmdclass,
+    entry_points=ENTRY_POINTS,
 )
