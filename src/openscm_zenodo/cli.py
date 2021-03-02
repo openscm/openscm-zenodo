@@ -5,6 +5,9 @@ import logging
 
 import click
 
+from .uploading import upload_file
+from .zenodo import get_bucket_id
+
 DEFAULT_LOG_FORMAT = "{process} {asctime} {levelname}:{name}:{message}"
 """str: Default format used for logging output"""
 
@@ -94,3 +97,55 @@ def cli(log_level):
     netcdf_scm_logger.setLevel(log_level)
 
     logging.captureWarnings(True)
+
+
+_zenodo_url = click.option(
+    "--zenodo-url",
+    default="sandbox.zenodo.org",
+    type=click.Choice(["sandbox.zenodo.org", "zenodo.org"]),
+    show_default=True,
+    help="Zenodo server to which to upload.",
+)
+_token = click.option('--token', envvar='ZENODO_TOKEN')
+
+
+@cli.command(context_settings={"help_option_names": ["-h", "--help"]})
+def create_new_version():
+    r"""
+    Create new version of a Zenodo record (i.e. a specific Zenodo deposition ID)
+    """
+    pass
+
+
+@cli.command(context_settings={"help_option_names": ["-h", "--help"]})
+@click.argument("file_to_upload", type=click.Path(exists=True, readable=True, dir_okay=False, resolve_path=True))
+@click.argument("bucket")
+@_zenodo_url
+@_token
+def upload(file_to_upload, bucket, zenodo_url, token):
+    r"""
+    Upload a file to a Zenodo bucket
+
+    ``file_to_upload`` will be uploaded to the Zenodo bucket specified by
+    ``bucket``.
+    """
+    # TODO: test this function
+    upload_file(filepath=file_to_upload, bucket=bucket, zenodo_url=zenodo_url, token=token)
+
+
+@cli.command(context_settings={"help_option_names": ["-h", "--help"]})
+@click.argument("deposition_id")
+@_zenodo_url
+@_token
+def get_bucket(deposition_id, zenodo_url, token):
+    r"""
+    Get the bucket associated with a given Zenodo deposition ID (``deposition_id``)
+
+    The ``upload`` command can then be used to upload files to this bucket.
+
+    This command is handy when you know your deposition ID but you've
+    forgotten the bucket address.
+    """
+    bucket_id = get_bucket_id(deposition_id=deposition_id, zenodo_url=zenodo_url, token=token)
+
+    click.echo(bucket_id)
