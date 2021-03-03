@@ -1,8 +1,9 @@
 name: OpenSCM-Zenodo CI-CD
-on: push
-  #   branches:
-  #     - master
-  # pull_request:
+on:
+  push:
+    branches:
+      - master
+  pull_request:
 
 jobs:
   linting-and-docs:
