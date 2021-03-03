@@ -59,8 +59,8 @@ Please see the `Development section of the docs <https://openscm-zenodo.readthed
 
 .. sec-begin-links
 
-.. |CI CD| image:: https://github.com/openscm/openscm-zenodo/workflows/OpenSCM-Units%20CI-CD/badge.svg
-    :target: https://github.com/openscm/openscm-zenodo/actions?query=workflow%3A%22OpenSCM-Units+CI-CD%22
+.. |CI CD| image:: https://github.com/openscm/openscm-zenodo/workflows/OpenSCM-Zenodo%20CI-CD/badge.svg
+    :target: https://github.com/openscm/openscm-zenodo/actions?query=workflow%3A%22OpenSCM-Zenodo+CI-CD%22
 .. |Coverage| image:: https://img.shields.io/codecov/c/github/openscm/openscm-zenodo.svg
     :target: https://codecov.io/gh/openscm/openscm-zenodo
 .. |Docs| image:: https://readthedocs.org/projects/openscm-zenodo/badge/?version=latest
