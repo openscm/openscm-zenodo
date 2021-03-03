@@ -18,4 +18,5 @@ The changes listed in this file are categorised as follows:
 master
 ------
 
+- (`#2 <https://github.com/openscm/openscm-zenodo/pull/2>`_) Add basic docs
 - (`#1 <https://github.com/openscm/openscm-zenodo/pull/1>`_) Add basic repository setup and functionality
