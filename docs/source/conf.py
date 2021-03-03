@@ -54,11 +54,12 @@ extensions = [
 ]
 
 autodoc_default_options = {
+    "members": True,
     "undoc-members": False,
     "private-members": False,
     "special-members": False,
     "inherited-members": True,
-    "show-inheritance": False,
+    "show-inheritance": True,
 }
 
 # Add any paths that contain templates here, relative to this directory.
@@ -182,6 +183,8 @@ epub_exclude_files = ["search.html"]
 
 
 # -- Extension configuration -------------------------------------------------
+
+coverage_write_headline = False  # do not write headlines.
 
 # -- Options for intersphinx extension ---------------------------------------
 
