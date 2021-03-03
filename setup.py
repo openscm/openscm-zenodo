@@ -64,7 +64,7 @@ SOURCE_DIR = "src"
 
 PACKAGES = find_packages(SOURCE_DIR)  # no exclude as only searching in `src`
 PACKAGE_DIR = {"": SOURCE_DIR}
-PACKAGE_DATA = {"openscm_zenodo": ["data/*.csv"]}
+PACKAGE_DATA = {}
 
 
 README = "README.rst"
