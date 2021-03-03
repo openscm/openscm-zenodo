@@ -22,7 +22,7 @@ jobs:
         python-version: ${{ matrix.python-version }}
     - name: Install dev dependencies
       run: |
-        pip install --upgrade pip
+        pip install --upgrade pip wheel
         pip install -e .[dev]
     - name: Formatting and linters
       run: |
@@ -64,7 +64,7 @@ jobs:
         python-version: ${{ matrix.python-version }}
     - name: Install test dependencies
       run: |
-        pip install --upgrade pip
+        pip install --upgrade pip wheel
         pip install -e .[tests]
     - name: Test with pytest
       if: matrix.python-version != 3.7
@@ -132,7 +132,7 @@ jobs:
         python-version: ${{ matrix.python-version }}
     - name: Install dependencies
       run: |
-        pip install --upgrade pip
+        pip install --upgrade pip wheel
         pip install -e .[dev]
     - name: Create package
       run: |
