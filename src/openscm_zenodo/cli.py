@@ -114,7 +114,10 @@ _deposition_id = click.argument("deposition_id")
 @_deposition_id
 @_zenodo_url
 @_token
-@click.argument("deposit_metadata", type=click.Path(exists=True, readable=True, dir_okay=False, resolve_path=True),)
+@click.argument(
+    "deposit_metadata",
+    type=click.Path(exists=True, readable=True, dir_okay=False, resolve_path=True),
+)
 def create_new_version(deposition_id, zenodo_url, token, deposit_metadata):
     r"""
     Create new version of a Zenodo record (i.e. a specific Zenodo deposition ID).
@@ -124,7 +127,12 @@ def create_new_version(deposition_id, zenodo_url, token, deposit_metadata):
     The deposit metadata should be a ``.json`` file. It will be read and
     validated before the new version is created.
     """
-    new_version_deposition_id = create_new_zenodo_version(deposition_id=deposition_id, zenodo_url=zenodo_url, token=token, deposit_metadata=deposit_metadata)
+    new_version_deposition_id = create_new_zenodo_version(
+        deposition_id=deposition_id,
+        zenodo_url=zenodo_url,
+        token=token,
+        deposit_metadata=deposit_metadata,
+    )
 
     click.echo(new_version_deposition_id)
 

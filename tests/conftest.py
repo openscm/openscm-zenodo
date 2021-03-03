@@ -2,8 +2,9 @@ import os.path
 
 import pytest
 
-
-TEST_DATA_ROOT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "test-data")
+TEST_DATA_ROOT_DIR = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "test-data"
+)
 
 
 @pytest.fixture(scope="session")

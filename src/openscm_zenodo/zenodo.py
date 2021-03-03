@@ -1,3 +1,6 @@
+"""
+Zenodo interactions handling
+"""
 import json
 import logging
 
@@ -76,7 +79,7 @@ def _get_new_version(deposition_id, zenodo_url, token):
 
     new_version = response.json()["links"]["latest_draft"].split("/")[-1]
 
-    _LOGGER.info("New version: {}".format(new_version))
+    _LOGGER.info("New version: %s", new_version)
 
     return new_version
 
@@ -84,7 +87,9 @@ def _get_new_version(deposition_id, zenodo_url, token):
 def _remove_all_files(deposition_id, zenodo_url, token):
     _LOGGER.info("Removing all files at deposition id: %s", deposition_id)
 
-    url_to_hit = "https://{}/api/deposit/depositions/{}/files".format(zenodo_url, deposition_id)
+    url_to_hit = "https://{}/api/deposit/depositions/{}/files".format(
+        zenodo_url, deposition_id
+    )
 
     _LOGGER.debug("Sending to: %s", url_to_hit)
 
@@ -99,9 +104,7 @@ def _remove_all_files(deposition_id, zenodo_url, token):
         )
         _LOGGER.debug("Posting to: %s", url_to_hit)
 
-        response_file = requests.delete(
-            url_to_hit, params={"access_token": token},
-        )
+        response_file = requests.delete(url_to_hit, params={"access_token": token},)
         response_file.raise_for_status()
 
     _LOGGER.info("Finished removing all files")
@@ -110,7 +113,9 @@ def _remove_all_files(deposition_id, zenodo_url, token):
 def _set_upload_metadata(deposition_id, zenodo_url, token, deposit_metadata):
     _LOGGER.info("Setting metadata for deposition id: %s", deposition_id)
 
-    url_to_hit = "https://{}/api/deposit/depositions/{}".format(zenodo_url, deposition_id)
+    url_to_hit = "https://{}/api/deposit/depositions/{}".format(
+        zenodo_url, deposition_id
+    )
 
     _LOGGER.debug("Sending to: %s", url_to_hit)
 
@@ -149,8 +154,8 @@ def create_new_zenodo_version(deposition_id, zenodo_url, token, deposit_metadata
     str
         The deposition ID of the new version of the record
     """
-    with open(deposit_metadata, "r") as fh:
-        deposit_metadata_loaded = json.load(fh)
+    with open(deposit_metadata, "r") as fileh:
+        deposit_metadata_loaded = json.load(fileh)
     # validate deposit_metadata_loaded
 
     new_version = _get_new_version(deposition_id, zenodo_url, token)
