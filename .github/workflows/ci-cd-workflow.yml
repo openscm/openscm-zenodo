@@ -65,7 +65,7 @@ jobs:
     - name: Test with pytest
       if: matrix.python-version != 3.7
       run: |
-          pytest tests -r a --cov=openscm_zenodo --cov-report=xml
+          pytest tests -r a
     - name: Test with pytest including Zenodo token
       if: matrix.python-version == 3.7
       env:
