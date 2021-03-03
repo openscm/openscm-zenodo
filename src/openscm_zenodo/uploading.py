@@ -1,5 +1,5 @@
 """
-Upload file(s) to Zenodo
+File uploading handling
 
 Thanks https://gist.github.com/tyhoff/b757e6af83c1fd2b7b83057adf02c139
 for the progress bar.
@@ -19,32 +19,19 @@ _LOGGER = logging.getLogger(__name__)
 TQDM_KWARGS = dict(unit="B", unit_scale=True, unit_divisor=1024,)
 
 
-def upload_file(filepath, bucket, zenodo_url, token):
+def upload_with_progress_bar(filepath, upload_url):
     """
-    Upload file to Zenodo
+    Upload file with a progress bar
 
     Parameters
     ----------
     filepath : str
         Path to file to upload
 
-    bucket : str
-        Bucket to upload the file to
-
-    zenodo_url : str
-        Zenodo url to upload the file to (e.g. ``sandbox.zenodo.org`` or
-        ``zenodo.org``)
-
-    token : str
-        Token to use to authenticate the upload
+    upload_url : str
+        URL to put the file onto
     """
-    _LOGGER.info("Uploading %s to %s %s", filepath, bucket, zenodo_url)
-
-    upload_url_no_token = "https://{}/api/files/{}/{}?access_token=".format(
-        zenodo_url, bucket, os.path.basename(filepath),
-    )
-    _LOGGER.debug("Upload url: %s", upload_url_no_token)
-    upload_url = "{}{}".format(upload_url_no_token, token,)
+    _LOGGER.info("Uploading %s to %s", filepath, upload_url)
 
     file_size = os.stat(filepath).st_size
 

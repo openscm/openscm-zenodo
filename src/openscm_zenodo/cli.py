@@ -5,8 +5,7 @@ import logging
 
 import click
 
-from .uploading import upload_file
-from .zenodo import create_new_zenodo_version, get_bucket_id
+from .zenodo import create_new_zenodo_version, get_bucket_id, upload_file
 
 DEFAULT_LOG_FORMAT = "{process} {asctime} {levelname}:{name}:{message}"
 """str: Default format used for logging output"""

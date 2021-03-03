@@ -1,3 +1,3 @@
 """
-Simple tools for uploading files to Zenodo
+Command-line tool for uploading to zenodo
 """

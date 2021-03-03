@@ -3,8 +3,11 @@ Zenodo interactions handling
 """
 import json
 import logging
+import os.path
 
 import requests
+
+from .uploading import upload_with_progress_bar
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -22,41 +25,6 @@ def _get_deposit(deposition_id, zenodo_url, token):
     response.raise_for_status()
 
     return response
-
-
-def get_bucket_id(deposition_id, zenodo_url, token):
-    """
-    Get bucket ID for a given Zenodo deposition ID
-
-    Parameters
-    ----------
-    deposition_id : str
-        Deposition ID to check
-
-    zenodo_url : str
-        Zenodo url to upload the file to (e.g. ``sandbox.zenodo.org`` or
-        ``zenodo.org``)
-
-    token : str
-        Token to use to authenticate the request
-
-    Returns
-    -------
-    str
-        The bucket associated with ``deposition_id``
-    """
-    _LOGGER.info("Determining bucket for deposition_id: %s", deposition_id)
-
-    _LOGGER.debug("Retrieving deposit")
-    response = _get_deposit(deposition_id, zenodo_url, token)
-
-    bucket = response.json()["links"]["bucket"]
-    _LOGGER.debug("Full url for bucket: %s", bucket)
-
-    bucket = bucket.split("/")[-1]
-    _LOGGER.info("Successfully retrieved bucket: %s", bucket)
-
-    return bucket
 
 
 def _get_new_version(deposition_id, zenodo_url, token):
@@ -164,3 +132,68 @@ def create_new_zenodo_version(deposition_id, zenodo_url, token, deposit_metadata
     _set_upload_metadata(new_version, zenodo_url, token, deposit_metadata_loaded)
 
     return new_version
+
+
+def upload_file(filepath, bucket, zenodo_url, token):
+    """
+    Upload file to Zenodo
+
+    Parameters
+    ----------
+    filepath : str
+        Path to file to upload
+
+    bucket : str
+        Bucket to upload the file to
+
+    zenodo_url : str
+        Zenodo url to upload the file to (e.g. ``sandbox.zenodo.org`` or
+        ``zenodo.org``)
+
+    token : str
+        Token to use to authenticate the upload
+    """
+    _LOGGER.info("Uploading file `%s` to bucket `%s` at `%s`", filepath, bucket, zenodo_url)
+
+    upload_url_no_token = "https://{}/api/files/{}/{}?access_token=".format(
+        zenodo_url, bucket, os.path.basename(filepath),
+    )
+    _LOGGER.debug("Upload url: %s", upload_url_no_token)
+    upload_url = "{}{}".format(upload_url_no_token, token)
+
+    upload_with_progress_bar(filepath, upload_url)
+
+
+def get_bucket_id(deposition_id, zenodo_url, token):
+    """
+    Get bucket ID for a given Zenodo deposition ID
+
+    Parameters
+    ----------
+    deposition_id : str
+        Deposition ID to check
+
+    zenodo_url : str
+        Zenodo url to upload the file to (e.g. ``sandbox.zenodo.org`` or
+        ``zenodo.org``)
+
+    token : str
+        Token to use to authenticate the request
+
+    Returns
+    -------
+    str
+        The bucket associated with ``deposition_id``
+    """
+    _LOGGER.info("Determining bucket for deposition_id: %s", deposition_id)
+
+    _LOGGER.debug("Retrieving deposit")
+    response = _get_deposit(deposition_id, zenodo_url, token)
+
+    bucket = response.json()["links"]["bucket"]
+    _LOGGER.debug("Full url for bucket: %s", bucket)
+
+    bucket = bucket.split("/")[-1]
+    _LOGGER.info("Successfully retrieved bucket: %s", bucket)
+
+    return bucket
