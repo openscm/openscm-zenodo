@@ -57,7 +57,7 @@ autodoc_default_options = {
     "undoc-members": False,
     "private-members": False,
     "special-members": False,
-    "inherited-members": False,
+    "inherited-members": True,
     "show-inheritance": False,
 }
 
