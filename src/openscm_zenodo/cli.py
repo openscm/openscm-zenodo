@@ -144,7 +144,6 @@ def upload(file_to_upload, bucket, zenodo_url, token):
     ``file_to_upload`` will be uploaded to the Zenodo bucket specified by
     ``bucket``.
     """
-    # TODO: test this function
     upload_file(
         filepath=file_to_upload, bucket=bucket, zenodo_url=zenodo_url, token=token
     )

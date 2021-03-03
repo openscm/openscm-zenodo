@@ -58,7 +58,7 @@ docs: $(VENV_DIR)  ## build the docs
 
 .PHONY: test
 test:  $(VENV_DIR) ## run the full testsuite
-	$(VENV_DIR)/bin/pytest --cov -rfsxEX --cov-report term-missing
+	$(VENV_DIR)/bin/pytest tests --cov -r a --cov-report term-missing
 
 test-pypi-install: $(VENV_DIR)  ## test whether installing from PyPI works
 	$(eval TEMPVENV := $(shell mktemp -d))
