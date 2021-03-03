@@ -153,7 +153,9 @@ def upload_file(filepath, bucket, zenodo_url, token):
     token : str
         Token to use to authenticate the upload
     """
-    _LOGGER.info("Uploading file `%s` to bucket `%s` at `%s`", filepath, bucket, zenodo_url)
+    _LOGGER.info(
+        "Uploading file `%s` to bucket `%s` at `%s`", filepath, bucket, zenodo_url
+    )
 
     upload_url_no_token = "https://{}/api/files/{}/{}?access_token=".format(
         zenodo_url, bucket, os.path.basename(filepath),
