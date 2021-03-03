@@ -1,5 +1,9 @@
 name: OpenSCM-Zenodo CI-CD
-on: [push,pull_request]
+on:
+  push:
+    branches:
+      - master
+  pull_request:
 
 jobs:
   linting-and-docs:
@@ -143,6 +147,7 @@ jobs:
   deploy-pypi:
 
     needs: [test-install,create-dist]
+    if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     strategy:
       matrix:
