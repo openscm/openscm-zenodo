@@ -32,7 +32,7 @@ CLASSIFIERS = [
 
 ENTRY_POINTS = {"console_scripts": ["openscm-zenodo = openscm_zenodo.cli:cli"]}
 
-REQUIREMENTS = ["click"]
+REQUIREMENTS = ["click", "tqdm"]
 REQUIREMENTS_OPTIONAL = []
 REQUIREMENTS_TESTS = [
     "codecov",
