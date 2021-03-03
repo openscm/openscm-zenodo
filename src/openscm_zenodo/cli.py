@@ -6,7 +6,7 @@ import logging
 import click
 
 from .uploading import upload_file
-from .zenodo import get_bucket_id
+from .zenodo import create_new_zenodo_version, get_bucket_id
 
 DEFAULT_LOG_FORMAT = "{process} {asctime} {levelname}:{name}:{message}"
 """str: Default format used for logging output"""
@@ -107,14 +107,26 @@ _zenodo_url = click.option(
     help="Zenodo server to which to upload.",
 )
 _token = click.option("--token", envvar="ZENODO_TOKEN")
+_deposition_id = click.argument("deposition_id")
 
 
 @cli.command(context_settings={"help_option_names": ["-h", "--help"]})
-def create_new_version():
+@_deposition_id
+@_zenodo_url
+@_token
+@click.argument("deposit_metadata", type=click.Path(exists=True, readable=True, dir_okay=False, resolve_path=True),)
+def create_new_version(deposition_id, zenodo_url, token, deposit_metadata):
     r"""
-    Create new version of a Zenodo record (i.e. a specific Zenodo deposition ID)
+    Create new version of a Zenodo record (i.e. a specific Zenodo deposition ID).
+
+    ``deposition_id`` is the deposition ID of any existing version DOI, but crucially **not** the DOI which represents all versions of the record (this won't work). The printed value is the deposition ID of the DOI which represents the new, specific version of the record.
+
+    The deposit metadata should be a ``.json`` file. It will be read and
+    validated before the new version is created.
     """
-    pass
+    new_version_deposition_id = create_new_zenodo_version(deposition_id=deposition_id, zenodo_url=zenodo_url, token=token, deposit_metadata=deposit_metadata)
+
+    click.echo(new_version_deposition_id)
 
 
 @cli.command(context_settings={"help_option_names": ["-h", "--help"]})
@@ -139,7 +151,7 @@ def upload(file_to_upload, bucket, zenodo_url, token):
 
 
 @cli.command(context_settings={"help_option_names": ["-h", "--help"]})
-@click.argument("deposition_id")
+@_deposition_id
 @_zenodo_url
 @_token
 def get_bucket(deposition_id, zenodo_url, token):
