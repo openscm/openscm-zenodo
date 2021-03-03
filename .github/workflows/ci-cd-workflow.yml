@@ -102,7 +102,8 @@ jobs:
         pip install .
     - name: Test installation
       run: |
-          python scripts/test_install.py
+        pip list
+        python scripts/test_install.py
 
   create-dist:
 
