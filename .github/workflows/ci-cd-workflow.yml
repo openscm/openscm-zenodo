@@ -64,7 +64,7 @@ jobs:
         pip install -e .[tests]
     - name: Test with pytest
       env:
-        MIN_COVERAGE: 95
+        MIN_COVERAGE: 90
         ZENODO_TOKEN: ${{ secrets.zenodo_sandbox_token }}
       run: |
           pytest tests -r a --cov=openscm_zenodo --cov-report=xml
