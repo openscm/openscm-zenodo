@@ -66,7 +66,7 @@ jobs:
       env:
         MIN_COVERAGE: 95
       run: |
-          pytest tests -r a --cov=openscm_zenodo --cov-report=xml
+          ZENODO_TOKEN={{ secrets.zenodo_sandbox_token }} pytest tests -r a --cov=openscm_zenodo --cov-report=xml
           if ! coverage report --fail-under=${MIN_COVERAGE} --show-missing
           then
               echo
