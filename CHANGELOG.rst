@@ -18,5 +18,8 @@ The changes listed in this file are categorised as follows:
 master
 ------
 
+v0.1.0 - 2021-03-03
+-------------------
+
 - (`#2 <https://github.com/openscm/openscm-zenodo/pull/2>`_) Add basic docs
 - (`#1 <https://github.com/openscm/openscm-zenodo/pull/1>`_) Add basic repository setup and functionality

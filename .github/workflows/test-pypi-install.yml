@@ -11,7 +11,7 @@ jobs:
     strategy:
       matrix:
         os: ["ubuntu-latest", "macos-latest", "windows-latest"]
-        python-version: [3.6, 3.7, 3.8]
+        python-version: [3.6, 3.7, 3.8, 3.9]
 
     steps:
     - name: Setup python
@@ -27,5 +27,3 @@ jobs:
     - name: Test installation
       run: |
         python scripts/test_install.py
-        pip install pytest
-        pytest tests

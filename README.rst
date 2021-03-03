@@ -64,7 +64,7 @@ Please see the `Development section of the docs <https://openscm-zenodo.readthed
 .. |Coverage| image:: https://img.shields.io/codecov/c/github/openscm/openscm-zenodo.svg
     :target: https://codecov.io/gh/openscm/openscm-zenodo
 .. |Docs| image:: https://readthedocs.org/projects/openscm-zenodo/badge/?version=latest
-    :target: https://openscm-zenodo.readthedocs.io/en/latest/?badge=latest
+    :target: https://openscm-zenodo.readthedocs.io/en/latest
 .. |PyPI Install| image:: https://github.com/openscm/openscm-zenodo/workflows/Test%20PyPI%20install/badge.svg
     :target: https://github.com/openscm/openscm-zenodo/actions?query=workflow%3A%22Test+PyPI+install%22
 .. |PyPI| image:: https://img.shields.io/pypi/pyversions/openscm-zenodo.svg
