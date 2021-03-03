@@ -20,3 +20,4 @@ def import_submodules(package_name):
 
 
 import_submodules("openscm_zenodo")
+print(openscm_zenodo.__version__)
