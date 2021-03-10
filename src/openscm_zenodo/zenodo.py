@@ -93,7 +93,12 @@ def _set_upload_metadata(deposition_id, zenodo_url, token, deposit_metadata):
         data=json.dumps(deposit_metadata),
         headers={"Content-Type": "application/json"},
     )
-    response.raise_for_status()
+
+    try:
+        response.raise_for_status()
+    except requests.exceptions.HTTPError:
+        _LOGGER.error("Error while uploading metadata: %s", response.text)
+        raise
 
     _LOGGER.debug("Successfully set metdata")
 
