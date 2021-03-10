@@ -28,6 +28,28 @@ def test_create_new_version_runs(test_data_dir, caplog):
 
 
 @pytest.mark.zenodo_token
+def test_create_new_version_metadata_error(test_data_dir, caplog):
+    runner = CliRunner(mix_stderr=False)
+    with caplog.at_level(logging.ERROR):
+        result = runner.invoke(
+            cli,
+            [
+                "--log-level",
+                "DEBUG",
+                "create-new-version",
+                "638907",
+                os.path.join(test_data_dir, "test-deposit-metadata-no-description.json"),
+            ],
+        )
+
+    assert result.exit_code == 1, result.stderr
+    assert len(caplog.records) == 1
+    assert caplog.records[0].levelname == "ERROR"
+    assert caplog.records[0].message.startswith("Error while uploading metadata: {")
+    assert '{"field": "metadata.description", "message": "Missing data for required field."}' in caplog.records[0].message
+
+
+@pytest.mark.zenodo_token
 def test_upload_runs(caplog, test_data_dir):
     runner = CliRunner(mix_stderr=False)
     with caplog.at_level(logging.DEBUG):
