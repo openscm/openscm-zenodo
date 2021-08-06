@@ -18,6 +18,11 @@ The changes listed in this file are categorised as follows:
 master
 ------
 
+Fixed
+~~~~~
+
+- (`#4 <https://github.com/openscm/openscm-zenodo/pull/4>`_) Handling of uploads when the Zenodo record does not have any published versions (hence no "latest" information)
+
 v0.1.1 - 2021-03-10
 -------------------
 
