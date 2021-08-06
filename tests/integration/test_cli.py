@@ -28,6 +28,36 @@ def test_create_new_version_runs(test_data_dir, caplog):
 
 
 @pytest.mark.zenodo_token
+def test_create_new_version_none_existing(test_data_dir, caplog):
+    runner = CliRunner(mix_stderr=False)
+    with caplog.at_level(logging.DEBUG):
+        result = runner.invoke(
+            cli,
+            [
+                "--log-level",
+                "DEBUG",
+                "create-new-version",
+                "894278",
+                os.path.join(test_data_dir, "test-deposit-metadata.json"),
+            ],
+        )
+
+    assert not result.exit_code, result.stderr
+    # new version is same as deposition id
+    assert result.stdout.strip() == "894278"
+
+    using_existing_record = [
+        r for r in caplog.records
+        if r.message == (
+            "No published versions of record, using given deposition id"
+        )
+    ]
+    assert len(using_existing_record)
+    using_existing_record = using_existing_record[0]
+    assert using_existing_record.levelname == "INFO"
+
+
+@pytest.mark.zenodo_token
 def test_create_new_version_metadata_error(test_data_dir, caplog):
     runner = CliRunner(mix_stderr=False)
     with caplog.at_level(logging.ERROR):
