@@ -47,10 +47,9 @@ def test_create_new_version_none_existing(test_data_dir, caplog):
     assert result.stdout.strip() == "894278"
 
     using_existing_record = [
-        r for r in caplog.records
-        if r.message == (
-            "No published versions of record, using given deposition id"
-        )
+        r
+        for r in caplog.records
+        if r.message == ("No published versions of record, using given deposition id")
     ]
     assert len(using_existing_record)
     using_existing_record = using_existing_record[0]
