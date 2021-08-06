@@ -33,19 +33,26 @@ def _get_new_version(deposition_id, zenodo_url, token):
     _LOGGER.debug("Retrieving deposit")
     response = _get_deposit(deposition_id, zenodo_url, token)
 
-    latest_version_deposition_id = response.json()["links"]["latest"].split("/")[-1]
-    _LOGGER.debug("Latest version of record: %s", latest_version_deposition_id)
+    try:
+        latest_version_deposition_id = response.json()["links"]["latest"].split("/")[-1]
+        _LOGGER.debug("Latest version of record: %s", latest_version_deposition_id)
 
-    url_to_hit = "https://{}/api/deposit/depositions/{}/actions/newversion".format(
-        zenodo_url, latest_version_deposition_id
-    )
+    except KeyError:
+        _LOGGER.info("No published versions of record, using given deposition id")
 
-    _LOGGER.debug("Posting to: %s", url_to_hit)
+        new_version = deposition_id
 
-    response = requests.post(url_to_hit, params={"access_token": token},)
-    response.raise_for_status()
+    else:
+        url_to_hit = "https://{}/api/deposit/depositions/{}/actions/newversion".format(
+            zenodo_url, latest_version_deposition_id
+        )
 
-    new_version = response.json()["links"]["latest_draft"].split("/")[-1]
+        _LOGGER.debug("Posting to: %s", url_to_hit)
+
+        response = requests.post(url_to_hit, params={"access_token": token},)
+        response.raise_for_status()
+
+        new_version = response.json()["links"]["latest_draft"].split("/")[-1]
 
     _LOGGER.info("New version: %s", new_version)
 
