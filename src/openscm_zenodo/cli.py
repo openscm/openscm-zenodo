@@ -142,9 +142,15 @@ def create_new_version(deposition_id, zenodo_url, token, deposit_metadata):
     type=click.Path(exists=True, readable=True, dir_okay=False, resolve_path=True),
 )
 @click.argument("bucket")
+@click.option(
+    "--root-dir",
+    help="Root directory (removed from file paths before uploading)",
+    type=str,
+    default=None
+)
 @_zenodo_url
 @_token
-def upload(file_to_upload, bucket, zenodo_url, token):
+def upload(file_to_upload, bucket, root_dir, zenodo_url, token):
     r"""
     Upload a file to a Zenodo bucket
 
@@ -152,7 +158,7 @@ def upload(file_to_upload, bucket, zenodo_url, token):
     ``bucket``.
     """
     upload_file(
-        filepath=file_to_upload, bucket=bucket, zenodo_url=zenodo_url, token=token
+        filepath=file_to_upload, bucket=bucket, root_dir=root_dir, zenodo_url=zenodo_url, token=token
     )
 
 

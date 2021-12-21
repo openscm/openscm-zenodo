@@ -146,7 +146,7 @@ def create_new_zenodo_version(deposition_id, zenodo_url, token, deposit_metadata
     return new_version
 
 
-def upload_file(filepath, bucket, zenodo_url, token):
+def upload_file(filepath, bucket, zenodo_url, token, root_dir=None):
     """
     Upload file to Zenodo
 
@@ -169,8 +169,13 @@ def upload_file(filepath, bucket, zenodo_url, token):
         "Uploading file `%s` to bucket `%s` at `%s`", filepath, bucket, zenodo_url
     )
 
+    if root_dir is None:
+        up_path = os.path.basename(filepath)
+    else:
+        up_path = filepath.replace(root_dir, "").replace(os.sep, "/")
+
     upload_url_no_token = "https://{}/api/files/{}/{}?access_token=".format(
-        zenodo_url, bucket, os.path.basename(filepath),
+        zenodo_url, bucket, up_path,
     )
     _LOGGER.debug("Upload url: %s", upload_url_no_token)
     upload_url = "{}{}".format(upload_url_no_token, token)
