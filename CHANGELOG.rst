@@ -15,6 +15,14 @@ The changes listed in this file are categorised as follows:
     - Security: in case of vulnerabilities.
 
 
+master
+------
+
+Added
+~~~~~
+
+- (`#5 <https://github.com/openscm/openscm-zenodo/pull/5>`_) Ability to specify the root directory to be removed when uploading files
+
 v0.1.2 - 2021-08-06
 -------------------
 
