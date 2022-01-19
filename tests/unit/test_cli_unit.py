@@ -20,7 +20,7 @@ def test_upload_defaults(caplog, test_data_dir):
         bucket=tbucket,
         root_dir=None,
         zenodo_url="sandbox.zenodo.org",
-        token=None,
+        token=os.getenv("ZENODO_TOKEN", None),
     )
 
 
@@ -41,5 +41,5 @@ def test_upload_root_dir(caplog, test_data_dir):
         bucket=tbucket,
         root_dir=troot_dir,
         zenodo_url="sandbox.zenodo.org",
-        token=None,
+        token=os.getenv("ZENODO_TOKEN", None),
     )
