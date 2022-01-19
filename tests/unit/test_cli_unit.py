@@ -1,8 +1,6 @@
-import logging
 import os.path
 from unittest.mock import patch
 
-import pytest
 from click.testing import CliRunner
 
 from openscm_zenodo.cli import cli
