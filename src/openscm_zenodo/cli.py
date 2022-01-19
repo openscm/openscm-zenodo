@@ -47,7 +47,7 @@ class ColorFormatter(logging.Formatter):
             level = record.levelname.upper()
 
             if level in self.colors:
-                level_colour = click.style("{}".format(level), **self.colors[level])
+                level_colour = click.style(f"{level}", **self.colors[level])
                 formatted_message = formatted_message.replace(level, level_colour)
 
         return formatted_message
@@ -146,7 +146,7 @@ def create_new_version(deposition_id, zenodo_url, token, deposit_metadata):
     "--root-dir",
     help="Root directory (removed from file paths before uploading)",
     type=str,
-    default=None
+    default=None,
 )
 @_zenodo_url
 @_token
@@ -158,7 +158,11 @@ def upload(file_to_upload, bucket, root_dir, zenodo_url, token):
     ``bucket``.
     """
     upload_file(
-        filepath=file_to_upload, bucket=bucket, root_dir=root_dir, zenodo_url=zenodo_url, token=token
+        filepath=file_to_upload,
+        bucket=bucket,
+        root_dir=root_dir,
+        zenodo_url=zenodo_url,
+        token=token,
     )
 
 

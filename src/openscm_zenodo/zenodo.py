@@ -13,9 +13,7 @@ _LOGGER = logging.getLogger(__name__)
 
 
 def _get_deposit(deposition_id, zenodo_url, token):
-    url_to_hit = "https://{}/api/deposit/depositions/{}".format(
-        zenodo_url, deposition_id
-    )
+    url_to_hit = f"https://{zenodo_url}/api/deposit/depositions/{deposition_id}"
     headers_bucket_request = {"Accept": "application/json"}
 
     _LOGGER.debug("Sending request to: %s", url_to_hit)
@@ -43,9 +41,7 @@ def _get_new_version(deposition_id, zenodo_url, token):
         new_version = deposition_id
 
     else:
-        url_to_hit = "https://{}/api/deposit/depositions/{}/actions/newversion".format(
-            zenodo_url, latest_version_deposition_id
-        )
+        url_to_hit = f"https://{zenodo_url}/api/deposit/depositions/{latest_version_deposition_id}/actions/newversion"
 
         _LOGGER.debug("Posting to: %s", url_to_hit)
 
@@ -62,9 +58,7 @@ def _get_new_version(deposition_id, zenodo_url, token):
 def _remove_all_files(deposition_id, zenodo_url, token):
     _LOGGER.info("Removing all files at deposition id: %s", deposition_id)
 
-    url_to_hit = "https://{}/api/deposit/depositions/{}/files".format(
-        zenodo_url, deposition_id
-    )
+    url_to_hit = f"https://{zenodo_url}/api/deposit/depositions/{deposition_id}/files"
 
     _LOGGER.debug("Sending to: %s", url_to_hit)
 
@@ -74,9 +68,7 @@ def _remove_all_files(deposition_id, zenodo_url, token):
     for file_entry in response.json():
         _LOGGER.info("Removing file: %s", file_entry["id"])
 
-        url_to_hit = "https://{}/api/deposit/depositions/{}/files/{}".format(
-            zenodo_url, deposition_id, file_entry["id"]
-        )
+        url_to_hit = f"https://{zenodo_url}/api/deposit/depositions/{deposition_id}/files/{file_entry['id']}"
         _LOGGER.debug("Posting to: %s", url_to_hit)
 
         response_file = requests.delete(url_to_hit, params={"access_token": token},)
@@ -88,9 +80,7 @@ def _remove_all_files(deposition_id, zenodo_url, token):
 def _set_upload_metadata(deposition_id, zenodo_url, token, deposit_metadata):
     _LOGGER.info("Setting metadata for deposition id: %s", deposition_id)
 
-    url_to_hit = "https://{}/api/deposit/depositions/{}".format(
-        zenodo_url, deposition_id
-    )
+    url_to_hit = f"https://{zenodo_url}/api/deposit/depositions/{deposition_id}"
 
     _LOGGER.debug("Sending to: %s", url_to_hit)
 
@@ -134,7 +124,7 @@ def create_new_zenodo_version(deposition_id, zenodo_url, token, deposit_metadata
     str
         The deposition ID of the new version of the record
     """
-    with open(deposit_metadata, "r") as fileh:
+    with open(deposit_metadata, "r", encoding="utf8") as fileh:
         deposit_metadata_loaded = json.load(fileh)
     # validate deposit_metadata_loaded
 
@@ -181,11 +171,11 @@ def upload_file(filepath, bucket, zenodo_url, token, root_dir=None):
         if up_path.startswith(os.sep):
             up_path = up_path.strip(os.sep)
 
-    upload_url_no_token = "https://{}/api/files/{}/{}?access_token=".format(
-        zenodo_url, bucket, up_path,
+    upload_url_no_token = (
+        f"https://{zenodo_url}/api/files/{bucket}/{up_path}?access_token="
     )
     _LOGGER.debug("Upload url: %s", upload_url_no_token)
-    upload_url = "{}{}".format(upload_url_no_token, token)
+    upload_url = f"{upload_url_no_token}{token}"
 
     upload_with_progress_bar(filepath, upload_url)
 
