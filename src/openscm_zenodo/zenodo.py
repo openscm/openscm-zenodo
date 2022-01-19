@@ -164,6 +164,11 @@ def upload_file(filepath, bucket, zenodo_url, token, root_dir=None):
 
     token : str
         Token to use to authenticate the upload
+
+    root_dir : str
+        Path to remove from filename before uploading. If not supplied, only
+        the filename is used for uploading i.e. all preceeding directories are
+        stripped.
     """
     _LOGGER.info(
         "Uploading file `%s` to bucket `%s` at `%s`", filepath, bucket, zenodo_url
@@ -173,6 +178,8 @@ def upload_file(filepath, bucket, zenodo_url, token, root_dir=None):
         up_path = os.path.basename(filepath)
     else:
         up_path = filepath.replace(root_dir, "").replace(os.sep, "/")
+        if up_path.startswith(os.sep):
+            up_path = up_path.strip(os.sep)
 
     upload_url_no_token = "https://{}/api/files/{}/{}?access_token=".format(
         zenodo_url, bucket, up_path,
