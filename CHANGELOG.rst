@@ -21,6 +21,7 @@ v0.1.3 - 2022-01-20
 Added
 ~~~~~
 
+- (`#6 <https://github.com/openscm/openscm-zenodo/pull/6>`_) Added additional documentation regarding the usage of the package
 - (`#5 <https://github.com/openscm/openscm-zenodo/pull/5>`_) Ability to specify the root directory to be removed when uploading files
 
 v0.1.2 - 2021-08-06
