@@ -3,7 +3,7 @@ Usage
 
 The typical usage workflow looks something like the following:
 
-#. Create an API token for either `zenodo.org <https://zenodo.org/account/settings/applications/tokens/new/>`_ or `sandbox.zenodo.org <https://sandbox.zenodo.org/account/settings/applications/tokens/new/>`_ with a scope of ``deposit:write``. Make sure you that you specify the ``ZENODO_URL`` which matches the account for which you created the token.
+#. Create an API token for either `zenodo.org <https://zenodo.org/account/settings/applications/tokens/new/>`_ or `sandbox.zenodo.org <https://sandbox.zenodo.org/account/settings/applications/tokens/new/>`_ with a scope of ``deposit:write``. Make sure you specify the ``ZENODO_URL`` which matches the account for which you created the token.
 #. Setup the metadata for the deposition in a ``.json`` file. Note the filename, this is your ``DEPOSIT_METADATA`` below. An example of a simple metadata file is shown below, and additional information about the metadata fields can be found in the `Zenodo Developer Docs <https://developers.zenodo.org/#representation>`_.
 
     .. code-block:: json
