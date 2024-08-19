@@ -1,0 +1,381 @@
+<p><strong>Recommended citation</strong></p>
+<p>G&uuml;tschow, J.; Pfl&uuml;ger, M.; Busch, D. (2023): The PRIMAP-hist national historical emissions time series v3.0.0 (1750-2023). zenodo. doi:10.5281/zenodo.<em>8888</em>.</p>
+<p>G&uuml;tschow, J.; Jeffery, L.; Gieseke, R.; Gebel, R.; Stevens, D.; Krapp, M.; Rocha, M. (2016): The PRIMAP-hist national historical emissions time series, Earth Syst. Sci. Data, 8, 571-603, doi:10.5194/essd-8-571-2016</p>
+<p><strong>Content</strong></p>
+<ul>
+<li><a href="#use-of-the-dataset-and-full-description">Use of the dataset and full description</a></li>
+<li><a href="#abstract">Abstract</a></li>
+<li><a href="#support">Support</a></li>
+<li><a href="#sources">Sources</a></li>
+<li><a href="#files-included-in-the-dataset">Files included in the dataset</a></li>
+<li><a href="#notes">Notes</a></li>
+<li><a href="#data-format-description-columns">Data format description (columns)</a></li>
+<li><a href="#references">References</a></li>
+<li><a href="#changelog">Changelog</a></li>
+</ul>
+<p><strong>Abstract</strong></p>
+<p>The PRIMAP-hist dataset combines several published datasets to create a comprehensive set of greenhouse gas emission pathways for every country and Kyoto gas, covering the years 1750 to 2022, and almost all UNFCCC (United Nations Framework Convention on Climate Change) member states as well as most non-UNFCCC territories. The data resolves the main IPCC (Intergovernmental Panel on Climate Change) 2006 categories. For CO2, CH4, and N2O subsector data for Energy, Industrial Processes and Product Use (IPPU), and Agriculture are available. The "country reported data priority" (CR) scenario of the PRIMAP-hist datset prioritizes data that individual countries report to the UNFCCC. For developed countries, AnnexI in terms of the UNFCCC, this is the data submitted anually in the "common reporting format" (CRF). For developing countries, non-AnnexI in terms of the UNFCCC, this is the data available through the UNFCCC DI interface (di.unfccc.int) with additional country submissions read from pdf and where available xls(x) or csv files. For a list of these submissions please see below. For South Korea the 2022 official GHG inventory has not yet been submitted to the UNFCCC but is included in PRIMAP-hist. PRIMAP-hist also includes official data for Taiwan which is not recognized as a party to the UNFCCC.</p>
+<p>Gaps in the country reported data are filled using third party data such as CDIAC, EI (fossil CO2), Andrew cement emissions data (cement), FAOSTAT (agriculture), and EDGAR v8.0 (all sectors for CO2, CH4, N2O, except energy CO2), and EDGAR v7.0 (IPPU, f-gases). Lower priority data are harmonized to higher priority data in the gap-filling process.</p>
+<p>For the third party priority time series gaps in the third party data are filled from country reported data sources.</p>
+<p>Data for earlier years which are not available in the above mentioned sources are sourced from EDGAR-HYDE, CEDS, and RCP (N2O only) historical emissions.</p>
+<p>The v2.4 release of PRIMAP-hist reduced the time-lag from 2 to 1 years for the October release. Thus the present version 2.5.1 includes data for 2022. For energy CO2 growth rates from the BP statistical review of world energy are used to extend the country reported (CR) or CDIAC (TP) data to 2022. For CO2 from cement production Andrew cement data are used. For other gases and sectors we use EDGAR 8.0 data. For f-gases we have to rely on numerical methods to estimate emissions for 2022.</p>
+<p>Version 2.4.2 of the PRIMAP-hist dataset does not include emissions from Land Use, Land-Use Change, and Forestry (LULUCF) in the main file. LULUCF data are included in the file with increased number of significant digits and have to be used with care as they are constructed from different sources using different methodologies and are not harmonized.</p>
+<p>The PRIMAP-hist v2.5.1 dataset is an updated version of</p>
+<p>G&uuml;tschow, J.; Pfl&uuml;ger, M. (2023): The PRIMAP-hist national historical emissions time series v2.5 (1750-2022). zenodo. doi:10.5281/zenodo.10006301</p>
+<p>The <a href="#changelog">Changelog</a> indicates the most important changes. You can also check the issue tracker on <a href="https://github.com/JGuetschow/PRIMAP-hist">github.com/JGuetschow/PRIMAP-hist</a> for additional information on issues found after the release of the dataset. Detailed per country information is available from the detailed changelog which is available on the <a href="https://primap.org/primap-hist">primap.org</a> website and on zenodo.</p>
+<p><strong>Use of the dataset and full description</strong></p>
+<p>Before using the dataset, please read this document and the article describing the methodology, especially the section on uncertainties and the section on limitations of the method and use of the dataset.</p>
+<p>G&uuml;tschow, J.; Jeffery, L.; Gieseke, R.; Gebel, R.; Stevens, D.; Krapp, M.; Rocha, M. (2016): The PRIMAP-hist national historical emissions time series, Earth Syst. Sci. Data, 8, 571-603, doi:10.5194/essd-8-571-2016</p>
+<p>Please notify us (mail@johannes-guetschow.de) if you use the dataset so that we can keep track of how it is used and take that into consideration when updating and improving the dataset.</p>
+<p>When using this dataset or one of its updates, please cite the DOI of the precise version of the dataset used and also the data description article which this dataset is supplement to (see above). Please consider also citing the relevant original sources when using the PRIMAP-hist dataset. See the full citations in the References section further below.</p>
+<p>Since version 2.3 we use the data formats developed for the PRIMAP2 climate policy analysis suite: <a href="https://github.com/pik-primap/primap2">PRIMAP2 on GitHub</a>. The data are published both in the interchange format which consists of a csv file with the data and a yaml file with additional metadata and the native NetCDF based format. For a detailed description of the data format we refer to the <a href="https://primap2.readthedocs.io/en/stable/">PRIMAP2 documentation</a>.</p>
+<p>We have also included files with more than three significant digits. These files are mainly aimed at people doing policy analysis using the country reported data scenario (HISTCR). Using the high precision data they can avoid questions on discrepancies with the reported data. The uncertainties of emissions data do not justify the additional significant digits and they might give a false sense of accuracy, so please use this version of the dataset with extra care.</p>
+<p><strong>Support</strong></p>
+<p>If you encounter possible errors or other things that should be noted, please check our issue tracker at <a href="https://github.com/JGuetschow/PRIMAP-hist">github.com/JGuetschow/PRIMAP-hist</a> and report your findings there. Please use the tag "v2.5.1" in any issue you create regarding this dataset.</p>
+<p>If you need support in using the dataset or have any other questions regarding the dataset, please contact mail@johannes-guetschow.de.</p>
+<p><strong>Sources</strong></p>
+<ul>
+<li><strong>Global CO2 emissions from cement production v231222 (Andrew 2023)</strong> <a href="https://doi.org/10.5281/zenodo.10423498">data</a>, <a href="https://doi.org/10.5194/essd-11-1675-2019">paper</a>: Andrew<br>(2023), Andrew (2019b)</li>
+<li><strong>EI Statistical Review of World Energy</strong> <a href="https://www.energyinst.org/statistical-review">website</a>: Energy Institute (2023)</li>
+<li><strong>CDIAC</strong> <a href="https://energy.appstate.edu/cdiac-appstate/data-products">data</a>: Boden et al. (2017): Gilfillan et al. (2020), <a href="https://essd.copernicus.org/articles/13/1667/2021/">paper</a> Gilfillan and Marland (2021)</li>
+<li><strong>CEDS</strong>: <a href="http://doi.org/10.5281/zenodo.3606753">data:</a> <a href="https://gmd.copernicus.org/articles/11/369/2018/">paper</a>: Hoesly et al. (2020), Hoesly et al. (2018)</li>
+<li><strong>EDGAR version 8.0</strong>: <a href="https://edgar.jrc.ec.europa.eu/dataset_ghg80">data/website</a>: European Commission, JRC (2023), report: European Commission. Joint Research Centre. (2023)</li>
+<li><strong>EDGAR version 7.0:</strong> <a href="https://doi.org/10.2904/JRC_DATASET_EDGAR">data</a>, <a href="https://edgar.jrc.ec.europa.eu/index.php/dataset_ghg70">website</a>, Reports: JRC (2022), JRC (2021)</li>
+<li><strong>EDGAR-HYDE 1.4</strong> <a href="http://themasites.pbl.nl/tridion/en/themasites/edgar/emission_data/edgar-hyde-100yr/edgar-hyde-1-4.html">data</a>: Van Aardenne et al. (2001), Olivier and Berdowski (2001)</li>
+<li><strong>FAOSTAT database</strong> <a href="http://www.fao.org/faostat/en/#data">data</a>: Food and Agriculture Organization of the United Nations (2024)</li>
+<li><strong>RCP historical data</strong> <a href="http://www.pik-potsdam.de/~mmalte/rcps/">data</a>, <a href="https://doi.org/10.1007/s10584-011-0156-z">paper</a>: Meinshausen et al. (2011)</li>
+<li><strong>UNFCCC National Communications and National Inventory Reports for developing countries available from the UNFCCC DI portal</strong> <a href="http://di.unfccc.int/detailed_data_by_party">website</a>, slightly updated version of <a href="https://doi.org/10.5281/zenodo.8159736">data</a>: UNFCCC (2023d), Pfl&uuml;ger and G&uuml;tschow (2023)</li>
+<li><strong>UNFCCC Bnnial Update Reports, National Communications, and National Inventory&nbsp;</strong><br><strong>Reports for developing countries</strong> <a href="https://unfccc.int/BURs">website-BURs</a>, <a href="https://unfccc.int/non-annex-I-NCs">website-NCs</a>, <a href="https://github.com/JGuetschow/UNFCCC_non-AnnexI_data/tree/main/extracted_data/UNFCCC">data</a>: UNFCCC (2023c), UNFCCC (2023a). &nbsp;Notes:&nbsp;<br>&nbsp; 1) Not all BUR and NC submissions are included as reading the data is time consuming and not all submission contain sufficient data to be used in PRIMAP-hist.<br>&nbsp; 2) Not all submissions included in PRIMAP-hist are available in the github repository as we do not (yet) have code that we can publish for all submissions.<br>&nbsp; 3) The only addition since PRIMAP-hist v2.5 is the 2019 inventory from India's <a href="https://unfccc.int/documents/636235">NC3</a></li>
+<li><strong>UNFCCC Common Reporting Format (CRF)</strong> <a href="https://unfccc.int/ghg-inventories-annex-i-parties/2023">website</a>, <a href="https://doi.org/10.5194/essd-10-1427-2018">paper</a>, <a href="https://github.com/JGuetschow/UNFCCC_non-AnnexI_data/tree/master/datasets/UNFCCC/CRF2023">data (24-01-08)</a>: UNFCCC (2024) (processed as described in Jeffery et al. (2018a))</li>
+<li><strong>Official country repositories (non-UNFCCC)</strong>
+<ul>
+<li>Taiwan / Republic of China: <a href="https://unfccc.saveoursky.org.tw/nir/tw_nir_2022.php">website</a>, <a href="https://github.com/JGuetschow/UNFCCC_non-AnnexI_data/tree/master/extracted_data/non-UNFCCC/Taiwan">data</a>: Republic of China - Environmental Protection Administration (2022)</li>
+<li>South Korea: <a href="http://www.gir.go.kr/home/board/read.do?pagerOffset=0&amp;maxPageItems=10&amp;maxIndexPages=10&amp;searchKey=&amp;searchValue=&amp;menuId=36&amp;boardId=58&amp;boardMasterId=2&amp;boardCategoryId=">website</a>, <a href="https://github.com/JGuetschow/UNFCCC_non-AnnexI_data/tree/master/extracted_data/non-UNFCCC/Republic_of_Korea">data</a>: Republic of Korea (2022)</li>
+</ul>
+</li>
+</ul>
+<p><strong>Files included in the dataset</strong></p>
+<p>For each dataset we have three files: the <em>.nc</em> file contains the data and metadata in the native PRIMAP2 netCDF based format. The <em>.csv</em> file contains the data in a csv format following the specifications of the PRIMAP2 interchange format. The metadata for the interchange format file is included in the <em>.yaml</em> file.</p>
+<ul>
+<li><strong>Guetschow-et-al-2024-PRIMAP-hist_v2.5.1_27-Feb-2024.X</strong>: The main dataset with numerical extrapolation of all time series to 2022 and three significant digits.</li>
+<li><strong>Guetschow-et-al-2024-PRIMAP-hist_v2.5.1_no_extrap_27-Feb-2024.X</strong>: Variant without numerical extrapolation of missing values and not including the country groups mentioned in section ["country"] (three significant digits).</li>
+<li><strong>Guetschow-et-al-2024-PRIMAP-hist_v2.5.1_no_rounding_27-Feb-2024.X</strong>: The main dataset with numerical extrapolation of all time series to 2022 and eleven significant digits.</li>
+<li><strong>Guetschow-et-al-2024-PRIMAP-hist_v2.5.1_no_extrap_no_rounding_27-Feb-2024.csv</strong>: Variant without numerical extrapolation of missing values and not including the country groups mentioned in section ["country"] (eleven significant digits).</li>
+<li><strong>PRIMAP-hist_v2.5.1_data-description.pdf</strong>: Data description including changelog.</li>
+<li><strong>PRIMAP-hist_v2.5.1_updated_figures.pdf</strong>: Updated figures from the PRIMAP-hist paper published in ESSD.</li>
+<li><strong>changes_PRIMAP-hist_v2.5.1_final_nr_to_v2.5_final_nr.xlsx</strong>: xlsx file which lists relative changes per country, gas and main sector for 2005, 2015, 2020, 2021, 2022, and 1990-2022 (cumulative) from v2.5 to v2.5.1 (comparison between latest version ans current version).</li>
+<li><strong>changes_PRIMAP-hist_v2.5.1_final_nr_CR_to_TP.xlsx</strong>: xlsx file which lists relative differences per country, gas and main sector for 2005, 2015, 2020, 2021, 2022, and 1990-2022 (cumulative) between country reported priority and third party priority scenarios.</li>
+<li><strong>changelog_v2.5_final_to_v2.5.1_final.zip</strong>: Detailed changelog in html format containing plots and a breakdown of changes to sectors and gases for all countries. Country specific notes ar also included. To use the changelog locally unpack the zip file and open the file in the "html" directory in your browser. The changelog is also available on the <a href="https://primap.org/primap-hist/">primap.org</a> website.</li>
+</ul>
+<p><strong>Notes</strong></p>
+<ul>
+<li>Emissions from international aviation and shipping are not included in the dataset.</li>
+<li>Emissions from Land Use, Land-Use Change, and Forestry (LULUCF) are not included in the main version of this dataset. They are included in the version without rounding as users need to take extra care when using LULUCF data because changes some of the year-to-year changes in the data come from using different sources or methodology changes within a source rather than changes in actual emissions.</li>
+</ul>
+<p><strong>Data format description</strong></p>
+<p>The PRIMAP-hist data in the comma-separated values (CSV) files is formatted consistently with the PRIMAP2 interchange format.</p>
+<p>The data contained in each column are as follows:</p>
+<p><em>"source"</em></p>
+<p>Name of the data source. Here: <em>PRIMAP-hist_v2.5.1</em> with suffixes <em>_ne</em> for no extrapolation and <em>_nr</em> for no rounding.</p>
+<p><em>"scenario (PRIMAP)"</em></p>
+<ul>
+<li>HISTCR: In this scenario country-reported data (CRF, BUR / NIR / NC / UNFCCCDI) are prioritized over third-party data (CDIAC, FAO, Andrew, EDGAR, BP).</li>
+<li>HISTTP: In this scenario third-party data (CDIAC, FAO, Andrew, EDGAR, BP) are prioritized over country-reported data (CRF, BUR / NIR / NC / UNFCCCDI)</li>
+</ul>
+<p><em>"provenance"</em></p>
+<p>Provenance of the data. Here: "derived" as it is a composite source.</p>
+<p><em>"country"</em></p>
+<p>ISO 3166 three-letter country codes or custom codes for groups:</p>
+<table>
+<tbody>
+<tr>
+<td><strong>Code</strong></td>
+<td><strong>Region description</strong></td>
+</tr>
+<tr>
+<td>EARTH</td>
+<td>Aggregated emissions for all countries.</td>
+</tr>
+<tr>
+<td>ANNEXI</td>
+<td>Annex I Parties to the Convention</td>
+</tr>
+<tr>
+<td>NONANNEXI</td>
+<td>Non-Annex I Parties to the Convention</td>
+</tr>
+<tr>
+<td>AOSIS</td>
+<td>Alliance of Small Island States</td>
+</tr>
+<tr>
+<td>BASIC</td>
+<td>BASIC countries (Brazil, South Africa, India and China)</td>
+</tr>
+<tr>
+<td>EU27BX</td>
+<td>European Union post Brexit</td>
+</tr>
+<tr>
+<td>LDC</td>
+<td>Least Developed Countries</td>
+</tr>
+<tr>
+<td>UMBRELLA</td>
+<td>Umbrella Group</td>
+</tr>
+</tbody>
+</table>
+<p>Table: Additional "country" codes.</p>
+<p><em>"category"</em></p>
+<p>IPCC (Intergovernmental Panel on Climate Change) 2006 categories for emissions. Some aggregate sectors have been added to the hierarchy. These begin with the prefix <em>M</em>.</p>
+<table>
+<tbody>
+<tr>
+<td><strong>Code</strong></td>
+<td><strong>Description</strong></td>
+<td><strong>Gases covered</strong></td>
+</tr>
+<tr>
+<td>M.0.EL</td>
+<td>National Total excluding LULUCF</td>
+<td>all</td>
+</tr>
+<tr>
+<td>1</td>
+<td>Energy</td>
+<td>CO2, CH4, N2O</td>
+</tr>
+<tr>
+<td>1.A</td>
+<td>Fuel Combustion Activities</td>
+<td>CO2, CH4, N2O</td>
+</tr>
+<tr>
+<td>1.B</td>
+<td>Fugitive Emissions from Fuels</td>
+<td>CO2, CH4, N2O</td>
+</tr>
+<tr>
+<td>1.B.1</td>
+<td>Solid Fuels</td>
+<td>CO2, CH4, N2O</td>
+</tr>
+<tr>
+<td>1.B.2</td>
+<td>Oil and Natural Gas</td>
+<td>CO2, CH4, N2O</td>
+</tr>
+<tr>
+<td>1.B.3</td>
+<td>Other Emissions from Energy Production</td>
+<td>CO2, CH4, N2O</td>
+</tr>
+<tr>
+<td>1.C</td>
+<td>Carbon Dioxide Transport and Storage</td>
+<td>CO2</td>
+</tr>
+<tr>
+<td>2</td>
+<td>Industrial Processes and Product Use (IPPU)</td>
+<td>CO2, CH4, N2O, f-gases</td>
+</tr>
+<tr>
+<td>2.A</td>
+<td>Mineral Industry</td>
+<td>CO2</td>
+</tr>
+<tr>
+<td>2.B</td>
+<td>Chemical Industry</td>
+<td>CO2, CH4, N2O</td>
+</tr>
+<tr>
+<td>2.C</td>
+<td>Metal Industry</td>
+<td>CO2, CH4, N2O</td>
+</tr>
+<tr>
+<td>2.D</td>
+<td>Non-Energy Prod. from Fuels and Solvent Use</td>
+<td>CO2, CH4, N2O</td>
+</tr>
+<tr>
+<td>2.E</td>
+<td>Electronics Industry</td>
+<td>N2O (f-gases emitted but not resolved)</td>
+</tr>
+<tr>
+<td>2.F</td>
+<td>
+<p>Product uses as Substitutes for Ozone Depleting Substances&nbsp;</p>
+<p>(no data available as the category is only used for fluorinated gases which are only resolved at the level of category 2)</p>
+</td>
+<td>--</td>
+</tr>
+<tr>
+<td>2.G</td>
+<td>Other Product Manufacture and Use</td>
+<td>CO2, CH4, N2O</td>
+</tr>
+<tr>
+<td>2.H</td>
+<td>Other</td>
+<td>CO2, CH4, N2O</td>
+</tr>
+<tr>
+<td>M.AG</td>
+<td>Agriculture, sum of 3.A and M.AG.ELV</td>
+<td>CO2, CH4, N2O</td>
+</tr>
+<tr>
+<td>3.A</td>
+<td>Livestock</td>
+<td>CH4, N2O</td>
+</tr>
+<tr>
+<td>M.AG.ELV</td>
+<td>Agriculture excluding Livestock</td>
+<td>CO2, CH4, N2O</td>
+</tr>
+<tr>
+<td>4</td>
+<td>Waste</td>
+<td>CO2, CH4, N2O</td>
+</tr>
+<tr>
+<td>5</td>
+<td>Other</td>
+<td>CO2, CH4, N2O</td>
+</tr>
+</tbody>
+</table>
+<p>Table: Category descriptions using IPCC 2006 terminology.</p>
+<p>The categories are organized in a hierarchy where children of each category sum to the parent category. The full IPCC2006 category hierarchy contains many more subcategories, but data availability is not sufficient to resolve the full IPCC category tree in PRIMAP-hist. However, we will regularly assess if the available data allows for resolving addition subcategories. The categories currently resoved by PRIMAP-hist are organized as follows.<br><br>&nbsp; &nbsp; M.0.EL Total emissions excluding LULUCF<br>&nbsp; &nbsp; ├1 Energy<br>&nbsp; &nbsp; │├1.A Fuel Combustion Activities &nbsp; &nbsp; &nbsp;&nbsp;<br>&nbsp; &nbsp; │├1.B Fugitive Emissions from Fuels<br>&nbsp; &nbsp; ││├1.B.1 Solid Fuels<br>&nbsp; &nbsp; ││├1.B.2 Oil and Natural Gas<br>&nbsp; &nbsp; ││╰1.B.3 Other Emissions from Energy Production<br>&nbsp; &nbsp; │╰1.C Carbon Dioxide Transport and Storage<br>&nbsp; &nbsp; ├2 Industrial Processes and Product Use<br>&nbsp; &nbsp; │├2.A Mineral Industry<br>&nbsp; &nbsp; │├2.B Chemical Industry<br>&nbsp; &nbsp; │├2.C Metal Industry<br>&nbsp; &nbsp; │├2.D Non-Energy Products from Fuels and Solvent Use<br>&nbsp; &nbsp; │├2.E Electronics Industry<br>&nbsp; &nbsp; │├2.F Product Uses as Substitutes for Ozone Depleting Substances<br>&nbsp; &nbsp; │├2.G Other Product Manufacture and Use<br>&nbsp; &nbsp; │╰2.H Other<br>&nbsp; &nbsp; ├4 Waste<br>&nbsp; &nbsp; ├5 Other<br>&nbsp; &nbsp; ╰M.AG Agriculture<br>&nbsp; &nbsp; &nbsp;├3.A Livestock<br>&nbsp; &nbsp; &nbsp;╰M.AG.ELV Agriculture excluding Livestock<br><br><br>Some new text here. The "no_rounding" version of the dataset additionally contains data for the "Land Use, Land Use Change, and Forestry" sector and sectors sums including this sectors</p>
+<table>
+<tbody>
+<tr>
+<td><strong>Code</strong></td>
+<td><strong>Description</strong></td>
+<td><strong>Gases covered</strong></td>
+</tr>
+<tr>
+<td>0</td>
+<td>National Total including LULUCF</td>
+<td>CO2, CH4, N2O, f-gases</td>
+</tr>
+<tr>
+<td>3</td>
+<td>Agriculture, Forestry and Other Land Use (AFOLU)</td>
+<td>CO2, CH4, N2O</td>
+</tr>
+<tr>
+<td>M.LULUCF</td>
+<td>Land Use, Land Use Change, and Forestry</td>
+<td>CO2, CH4, N2O</td>
+</tr>
+</tbody>
+</table>
+<p>Table: Additional category descriptions using IPCC 2006 terminology.<br><br>PRIMAP-hist uses a distinction between agriculture and Land Use, Land Use Change and Forestry which are combined into the AFOLU sector in IPCC2006 categories. Thus, in contrast to the standard IPCC 2006 categories, category &nbsp;3 "Agriculture, Forestry, and Other Land Use" is subdivided as follows:<br><br>&nbsp; &nbsp; 3 Agriculture, Forestry, and Other Land Use<br>&nbsp; &nbsp; ├M.AG Agriculture<br>&nbsp; &nbsp; │├3.A Livestock<br>&nbsp; &nbsp; │╰M.AG.ELV Agriculture excluding Livestock<br>&nbsp; &nbsp; ╰M.LULUCF Land Use, Land Use Change, and Forestry<br><br>Where a national total including LULUCF is reported, it is calculated as the sum of "M.0.EL Total emissions excluding LULUCF" and "M.LULUCF Land Use, Land Use Change, and Forestry":<br><br>&nbsp; &nbsp; 0 National Total<br>&nbsp; &nbsp; ├M.0.EL Total emissions excluding LULUCF<br>&nbsp; &nbsp; │├1 Energy<br>&nbsp; &nbsp; │├2 Industrial Processes and Product Use<br>&nbsp; &nbsp; │├4 Waste<br>&nbsp; &nbsp; │├5 Other<br>&nbsp; &nbsp; │╰M.AG Agriculture<br>&nbsp; &nbsp; ╰M.LULUCF Land Use, Land Use Change, and Forestry<br><br><br>"<em>entity</em>"<br><br>Gas baskets using global warming potentials (GWP) from the Second Assessment Report (SAR), Fourth Assessment Report (AR4), Fifth Assessment Report (AR5), Sixth Assessment Report (AR6).</p>
+<table>
+<tbody>
+<tr>
+<td><strong>Code</strong></td>
+<td><strong>Description</strong></td>
+</tr>
+<tr>
+<td>CH4</td>
+<td>Methane</td>
+</tr>
+<tr>
+<td>CO2</td>
+<td>Carbon Dioxide</td>
+</tr>
+<tr>
+<td>N2O</td>
+<td>Nitrous Oxide</td>
+</tr>
+<tr>
+<td>HFCS (SARGWP100)</td>
+<td>Hydrofluorocarbons (SAR)</td>
+</tr>
+<tr>
+<td>HFCS (AR4GWP100)</td>
+<td>Hydrofluorocarbons (AR4)</td>
+</tr>
+<tr>
+<td>HFCS (AR5GWP100)</td>
+<td>Hydrofluorocarbons (AR5)</td>
+</tr>
+<tr>
+<td>HFCS (AR6GWP100)</td>
+<td>Hydrofluorocarbons (AR6)</td>
+</tr>
+<tr>
+<td>PFCS (SARGWP100)</td>
+<td>Perfluorocarbons (SAR)</td>
+</tr>
+<tr>
+<td>PFCS (AR4GWP100)</td>
+<td>Perfluorocarbons (AR4)</td>
+</tr>
+<tr>
+<td>PFCS (AR5GWP100)</td>
+<td>Perfluorocarbons (AR5)</td>
+</tr>
+<tr>
+<td>PFCS (AR6GWP100)</td>
+<td>Perfluorocarbons (AR6)</td>
+</tr>
+<tr>
+<td>SF6</td>
+<td>Sulfur Hexafluoride</td>
+</tr>
+<tr>
+<td>NF3</td>
+<td>Nitrogen Trifluoride</td>
+</tr>
+<tr>
+<td>FGASES (SARGWP100)</td>
+<td>Fluorinated Gases (SAR): HFCs, PFCs, SF6, NF3</td>
+</tr>
+<tr>
+<td>FGASES (AR4GWP100)</td>
+<td>Fluorinated Gases (AR4): HFCs, PFCs, SF6, NF3</td>
+</tr>
+<tr>
+<td>FGASES (AR5GWP100)</td>
+<td>Fluorinated Gases (AR5): HFCs, PFCs, SF6, NF3</td>
+</tr>
+<tr>
+<td>FGASES (AR6GWP100)</td>
+<td>Fluorinated Gases (AR6): HFCs, PFCs, SF6, NF3</td>
+</tr>
+<tr>
+<td>KYOTOGHG (SARGWP100)</td>
+<td>Kyoto greenhouse gases (SAR)</td>
+</tr>
+<tr>
+<td>KYOTOGHG (AR4GWP100)</td>
+<td>Kyoto greenhouse gases (AR4)</td>
+</tr>
+<tr>
+<td>KYOTOGHG (AR5GWP100)</td>
+<td>Kyoto greenhouse gases (AR5)</td>
+</tr>
+<tr>
+<td>KYOTOGHG (AR6GWP100)</td>
+<td>Kyoto greenhouse gases (AR6)</td>
+</tr>
+</tbody>
+</table>
+<p>Table: Gas categories and underlying global warming potentials</p>
+<p><em>"unit"</em></p>
+<p>Unit is either <em>&lt;substance&gt; * gigagram / a</em> where substance is the entity or for CO2 equivalent units <em>CO2 * gigagram / a</em>. The CO2-equivalent is calculated according to the global warming potential indicated by the entity (see above).</p>
+<p><em>Remaining columns</em></p>
+<p>Years from 1750-2022.</p>
+<p><strong>Changelog</strong></p>
+<p>For the changelog we refer to the pdf version of the data description available for download here</p>
+<p><strong>References</strong></p>
+<p>For the full references we refer to the references section and the pdf version of the data description available for download here.</p>
