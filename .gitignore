@@ -1,3 +1,9 @@
+# pdm stuff
+.pdm-python
+
+# licence check
+licence-check.txt
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
