@@ -1,7 +1,11 @@
 """
 Command-line tool for uploading to zenodo
 """
-from ._version import get_versions
 
-__version__ = get_versions()["version"]
-del get_versions
+import importlib.metadata
+
+from loguru import logger
+
+logger.disable("openscm_zenodo")
+
+__version__ = importlib.metadata.version("openscm_zenodo")

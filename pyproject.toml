@@ -1,0 +1,233 @@
+[tool.pdm]
+package-dir = "src"
+
+[project]
+name = "openscm-zenodo"
+version = "0.1.4a1"
+description = "Command-line tool for uploading to zenodo"
+keywords = ["zenodo", "command-line"]
+readme = "README.md"
+authors = [
+    {name = "Zebedee Nicholls", email = "zebedee.nicholls@climate-energy-college.org"},
+    {name = "Jared Lewis", email = "jared.lewis@climate-energy-college.org"},
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: BSD License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+]
+dependencies = [
+    "requests",
+    "tqdm",
+    "typer",
+    "loguru",
+    "attrs",
+]
+license = {text = "3-Clause BSD License"}
+requires-python = ">=3.9"
+
+[project.urls]
+Homepage = "https://github.com/openscm/openscm-zenodo"
+"Bug Reports" = "https://github.com/openscm/openscm-zenodo/issues"
+Documentation = "https://openscm-zenodo.readthedocs.io/"
+Source = "https://github.com/openscm/openscm-zenodo"
+
+[project.optional-dependencies]
+optional = []
+dev = [
+    "mypy>=1.11.1",
+    "pre-commit>=3.8.0",
+    "types-tqdm>=4.66.0.20240417",
+    "types-requests>=2.32.0.20240712",
+    "towncrier>=23.11.0,<24",
+    "liccheck>=0.9.2",
+    "pip>=24.2",
+]
+docs = [
+    "mkdocs>=1.6.0",
+    "mkdocs-material>=9.5.32",
+    "mkdocstrings[python]>=0.25.2",
+    "mkdocs-gen-files>=0.5.0",
+    "mkdocs-literate-nav>=0.6.1",
+    "mkdocs-section-index>=0.3.9",
+    "mkdocs-autorefs>=1.0.1",
+    "mkdocs-jupyter>=0.24.8",
+    "jupyterlab>=4.2.4",
+    "jupytext>=1.16.4",
+]
+notebooks = [
+]
+tests = [
+    "pytest>=8.3.2",
+    "coverage>=7.6.1",
+    "pytest-cov>=5.0.0",
+]
+
+[project.scripts]
+openscm-zenodo = "openscm_zenodo.cli:app"
+
+[tool.pdm.build]
+locked = true
+includes = [
+    "src/openscm_zenodo",
+    "LICENCE",
+]
+
+[tool.coverage.run]
+source = [
+    "src",
+]
+branch = true
+
+[tool.coverage.report]
+fail_under = 80
+skip_empty = true
+show_missing = true
+exclude_also = [
+    "if TYPE_CHECKING",
+]
+
+[tool.mypy]
+strict = true
+disallow_any_unimported = true
+show_error_codes = true
+show_error_context = true
+warn_unreachable = true
+follow_imports = "normal"
+
+[tool.jupytext]
+formats = "ipynb,py:percent"
+
+[tool.pytest.ini_options]
+addopts = [
+    "--import-mode=importlib",
+]
+
+[tool.ruff]
+src = [
+    "src",
+]
+target-version = "py39"
+line-length = 88
+
+[tool.ruff.lint]
+select = [
+    "E",
+    "W",
+    "F",
+    "I",
+    "D",
+    "PL",
+    "TRY",
+    "NPY",
+    "RUF",
+    "UP",
+    "S",
+]
+unfixable = [
+    "PD002",
+]
+ignore = [
+    "D200",
+    "D400",
+    "UP007",
+]
+
+[tool.ruff.lint.per-file-ignores]
+"test*.py" = [
+    "D",
+    "S101",
+    "PLR2004",
+]
+"docs/*" = [
+    "D100",
+    "E402",
+    "S101",
+]
+"scripts/*" = [
+    "S101",
+]
+"stubs/*" = [
+    "PLR0913",
+]
+
+[tool.ruff.lint.isort]
+known-first-party = [
+    "src",
+]
+
+[tool.ruff.lint.pydocstyle]
+convention = "numpy"
+
+[tool.ruff.format]
+docstring-code-format = true
+
+[tool.towncrier]
+package = "openscm_zenodo"
+package_dir = "src"
+filename = "docs/changelog.md"
+directory = "changelog/"
+title_format = "## OpenSCM-Zenodo {version} ({project_date})"
+underlines = [
+    "",
+    "",
+    "",
+]
+issue_format = "[#{issue}](https://github.com/climate-resource/input4mips_validation/pulls/{issue})"
+type = [
+    { directory = "breaking", name = "⚠️ Breaking Changes", showcontent = true },
+    { directory = "deprecation", name = "🗑️ Deprecations", showcontent = true },
+    { directory = "feature", name = "🆕 Features", showcontent = true },
+    { directory = "improvement", name = "🎉 Improvements", showcontent = true },
+    { directory = "fix", name = "🐛 Bug Fixes", showcontent = true },
+    { directory = "docs", name = "📚 Improved Documentation", showcontent = true },
+    { directory = "trivial", name = "🔧 Trivial/Internal Changes", showcontent = false },
+]
+
+[tool.liccheck]
+authorized_licenses = [
+    "bsd",
+    "bsd license",
+    "BSD 3-Clause",
+    "CC0",
+    "apache",
+    "apache 2.0",
+    "apache software",
+    "apache software license",
+    "Apache License, Version 2.0",
+    "Historical Permission Notice and Disclaimer (HPND)",
+    "isc license",
+    "isc license (iscl)",
+    "gnu lgpl",
+    "lgpl with exceptions or zpl",
+    "LGPLv2+",
+    "GNU Lesser General Public License v2 (LGPLv2)",
+    "GNU Lesser General Public License v2 or later (LGPLv2+)",
+    "mit",
+    "mit license",
+    "Mozilla Public License 2.0 (MPL 2.0)",
+    "python software foundation",
+    "python software foundation license",
+    "zpl 2.1",
+]
+unauthorized_licenses = [
+    "agpl",
+    "gnu agpl",
+    "gpl v3",
+    "gplv3",
+    "gpl v2",
+    "gplv2",
+    "gpl v1",
+    "gplv1",
+]
+
+[build-system]
+requires = [
+    "pdm-backend",
+    "pdm-build-locked",
+]
+build-backend = "pdm.backend"

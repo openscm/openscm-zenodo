@@ -1,92 +1,84 @@
+# Makefile to help automate key steps
+
 .DEFAULT_GOAL := help
+# Will likely fail on Windows, but Makefiles are in general not Windows
+# compatible so we're not too worried
+TEMP_FILE := $(shell mktemp)
 
-VENV_DIR ?= venv
-TESTS_DIR=$(PWD)/tests
-
+# A helper script to get short descriptions of each target in the Makefile
 define PRINT_HELP_PYSCRIPT
 import re, sys
 
 for line in sys.stdin:
-	match = re.match(r'^([a-zA-Z_-]+):.*?## (.*)$$', line)
+	match = re.match(r'^([\$$\(\)a-zA-Z_-]+):.*?## (.*)$$', line)
 	if match:
 		target, help = match.groups()
-		print("%-20s %s" % (target, help))
+		print("%-30s %s" % (target, help))
 endef
 export PRINT_HELP_PYSCRIPT
 
+
 .PHONY: help
-help:
-	@python -c "$$PRINT_HELP_PYSCRIPT" < $(MAKEFILE_LIST)
+help:  ## print short description of each target
+	@python3 -c "$$PRINT_HELP_PYSCRIPT" < $(MAKEFILE_LIST)
 
-checks: $(VENV_DIR)  ## run all the checks
-	@echo "=== bandit ==="; $(VENV_DIR)/bin/bandit -c .bandit.yml -r src || echo "--- bandit failed ---" >&2; \
-		echo "\n\n=== black ==="; $(VENV_DIR)/bin/black --check src tests setup.py docs/source/conf.py --exclude openscm_zenodo/_version.py || echo "--- black failed ---" >&2; \
-		echo "\n\n=== flake8 ==="; $(VENV_DIR)/bin/flake8 src tests setup.py || echo "--- flake8 failed ---" >&2; \
-		echo "\n\n=== isort ==="; $(VENV_DIR)/bin/isort --check-only --quiet src tests setup.py || echo "--- isort failed ---" >&2; \
-		echo "\n\n=== pydocstyle ==="; $(VENV_DIR)/bin/pydocstyle src || echo "--- pydocstyle failed ---" >&2; \
-		echo "\n\n=== pylint ==="; $(VENV_DIR)/bin/pylint src || echo "--- pylint failed ---" >&2; \
-		echo "\n\n=== tests ==="; $(VENV_DIR)/bin/pytest tests --cov -rfsxEX --cov-report term-missing || echo "--- tests failed ---" >&2; \
-		echo "\n\n=== docs ==="; $(VENV_DIR)/bin/sphinx-build -M html docs/source docs/build -qW || echo "--- docs failed ---" >&2; \
-		echo
+.PHONY: checks
+checks:  ## run all the linting checks of the codebase
+	@echo "=== pre-commit ==="; pdm run pre-commit run --all-files || echo "--- pre-commit failed ---" >&2; \
+		echo "=== mypy ==="; MYPYPATH=stubs pdm run mypy src || echo "--- mypy failed ---" >&2; \
+		echo "======"
 
-.PHONY: format
-format:  ## re-format files
-	make isort
-	make black
+.PHONY: ruff-fixes
+ruff-fixes:  ## fix the code using ruff
+    # format before and after checking so that the formatted stuff is checked and
+    # the fixed stuff is formatted
+	pdm run ruff format src tests scripts
+	pdm run ruff check src tests scripts --fix
+	pdm run ruff format src tests scripts
 
-black: $(VENV_DIR)  ## apply black formatter to source and tests
-	@status=$$(git status --porcelain src tests docs scripts); \
-	if test ${FORCE} || test "x$${status}" = x; then \
-		$(VENV_DIR)/bin/black --exclude _version.py setup.py src tests docs/source/conf.py scripts/*.py; \
-	else \
-		echo Not trying any formatting. Working directory is dirty ... >&2; \
-	fi;
-
-isort: $(VENV_DIR)  ## format the code
-	@status=$$(git status --porcelain src tests); \
-	if test ${FORCE} || test "x$${status}" = x; then \
-		$(VENV_DIR)/bin/isort src tests setup.py; \
-	else \
-		echo Not trying any formatting. Working directory is dirty ... >&2; \
-	fi;
-
-.PHONY: docs
-docs: $(VENV_DIR)  ## build the docs
-	$(VENV_DIR)/bin/sphinx-build -M html docs/source docs/build
 
 .PHONY: test
-test:  $(VENV_DIR) ## run the full testsuite
-	$(VENV_DIR)/bin/pytest tests --cov -r a --cov-report term-missing
+test:  ## run the tests
+	pdm run pytest src tests -r a -v --doctest-modules --cov=src
 
-test-pypi-install: $(VENV_DIR)  ## test whether installing from PyPI works
-	$(eval TEMPVENV := $(shell mktemp -d))
-	python3 -m venv $(TEMPVENV)
-	$(TEMPVENV)/bin/pip install pip --upgrade
-	$(TEMPVENV)/bin/pip install openscm-zenodo --pre
-	$(TEMPVENV)/bin/python scripts/test_install.py
+# Note on code coverage and testing:
+# You must specify cov=src as otherwise funny things happen when doctests are
+# involved.
+# If you want to debug what is going on with coverage, we have found
+# that adding COVERAGE_DEBUG=trace to the front of the above command
+# can be very helpful as it shows you if coverage is tracking the coverage
+# of all of the expected files or not.
+# We are sure that the coverage maintainers would appreciate a PR that improves
+# the coverage handling when there are doctests and a `src` layout like ours.
 
-test-install: $(VENV_DIR)  ## test whether installing locally in a fresh env works
-	$(eval TEMPVENV := $(shell mktemp -d))
-	python3 -m venv $(TEMPVENV)
-	$(TEMPVENV)/bin/pip install wheel pip --upgrade
-	$(TEMPVENV)/bin/pip install .
-	$(TEMPVENV)/bin/python scripts/test_install.py
+.PHONY: docs
+docs: docs/cli/index.md  ## build the docs
+	pdm run mkdocs build
 
+.PHONY: docs-strict
+docs-strict: docs/cli/index.md  ## build the docs strictly (e.g. raise an error on warnings, this most closely mirrors what we do in the CI)
+	pdm run mkdocs build --strict
 
-virtual-environment:  ## update venv, create a new venv if it doesn't exist
-	make $(VENV_DIR)
+.PHONY: docs-serve
+docs-serve: docs/cli/index.md  ## serve the docs locally
+	pdm run mkdocs serve
 
-$(VENV_DIR): setup.py
-	[ -d $(VENV_DIR) ] || python3 -m venv $(VENV_DIR)
+docs/cli/index.md: src/openscm_zenodo/cli/__init__.py  ## auto-generate the typer app docs
+	pdm run typer openscm_zenodo.cli utils docs --output docs/cli/index.md --name openscm-zenodo
 
-	$(VENV_DIR)/bin/pip install --upgrade pip wheel
-	$(VENV_DIR)/bin/pip install -e .[dev]
+.PHONY: changelog-draft
+changelog-draft:  ## compile a draft of the next changelog
+	pdm run towncrier build --draft
 
-	touch $(VENV_DIR)
+.PHONY: licence-check
+licence-check:  ## Check that licences of the dependencies are suitable
+	# Will likely fail on Windows, but Makefiles are in general not Windows
+	# compatible so we're not too worried
+	pdm export -o $(TEMP_FILE) --without=tests --without=docs --without=dev
+	pdm run liccheck -r $(TEMP_FILE) -R licence-check.txt
+	rm $(TEMP_FILE)
 
-first-venv: ## create a new virtual environment for the very first repo setup
-	python3 -m venv $(VENV_DIR)
-
-	$(VENV_DIR)/bin/pip install --upgrade pip
-	$(VENV_DIR)/bin/pip install versioneer
-	# don't touch here as we don't want this venv to persist anyway
+.PHONY: virtual-environment
+virtual-environment:  ## update virtual environment, create a new one if it doesn't already exist
+	pdm install
+	pdm run pre-commit install

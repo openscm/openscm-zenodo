@@ -1,0 +1,118 @@
+site_name: OpenSCM-Zenodo
+site_description: Basic tools for interaction with Zenodo
+site_url: https://openscm-zenodo.readthedocs.io/en/latest/
+edit_uri: blob/main/docs/
+
+repo_name: openscm/openscm-zenodo
+repo_url: https://github.com/openscm/openscm-zenodo
+
+nav:
+  - OpenSCM-Zenodo: index.md
+  - Installation: installation.md
+  # TODO: write these
+  # - How-to guides:
+  #   - how-to-guides/index.md
+  #   - How to write a single valid file: how-to-guides/how-to-write-a-single-valid-file.py
+  #   - How validate a single file: how-to-guides/how-to-validate-a-single-file.py
+  #   - How to write a single file in the DRS: how-to-guides/how-to-write-a-single-file-in-the-drs.py
+  #   - How to upload to an FTP server: how-to-guides/how-to-upload-to-ftp.py
+  #   - How to manage a database of file entries: how-to-guides/how-to-manage-a-database.py
+  - Tutorials: tutorials.md
+  - Further background:
+    - Explanation: explanation.md
+  - Command-line interface: cli/index.md
+  - API reference: api/openscm_zenodo/
+  - Development: development.md
+  - Changelog: changelog.md
+
+theme:
+  name: "material"
+  features:
+    - content.code.copy
+  palette:
+    # Light mode (toggle to dark mode)
+    - scheme: default
+      primary: blue
+      accent: deep orange
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+
+    # Dark mode (toggle back to light mode)
+    - scheme: slate
+      primary: deep orange
+      accent: blue
+      toggle:
+        icon: material/brightness-7
+        name: Switch to light mode
+
+plugins:
+  # Required for auto-generating our documentation stubs,
+  # a bit like sphinx autodoc gen used to do
+  - gen-files:
+      scripts:
+        - docs/gen_doc_stubs.py
+  - search
+  - autorefs
+  - mkdocstrings:
+      enable_inventory: true
+      handlers:
+        python:
+          paths: [src]
+          import:
+            - https://www.attrs.org/en/latest/objects.inv
+            - https://unidata.github.io/cftime/objects.inv
+            - https://ncdata.readthedocs.io/en/latest/objects.inv
+            - https://pint.readthedocs.io/en/latest/objects.inv
+            - https://www.fatiando.org/pooch/latest/objects.inv
+            - https://docs.python.org/3/objects.inv
+            - https://scitools-iris.readthedocs.io/en/latest/objects.inv
+            - https://validators.readthedocs.io/en/latest/objects.inv
+            - http://xarray.pydata.org/en/latest/objects.inv
+            - https://loguru.readthedocs.io/en/latest/objects.inv
+          options:
+            docstring_style: numpy
+            show_root_heading: true
+            show_source: true
+  # # Make the nav recursive
+  - literate-nav
+  #     nav_file: SUMMARY.md
+  # https://oprypin.github.io/mkdocs-section-index/
+  # This won't work properly until we write a nav file too, job for another day
+  - section-index
+  # Working out how to make this play with nb-exec would be nice,
+  # then it wouldn't run every time.
+  # We could also get the nb-exec-table mentioned here:
+  # https://myst-nb.readthedocs.io/en/v0.12.2/use/execute.html
+  # One for another day.
+  - mkdocs-jupyter:
+      execute: true
+      # execute: false
+      allow_errors: false
+      # theme: dark
+      include_source: True
+      ignore: ["*.ipynb", "docs/gen_doc_stubs.py"]
+      remove_tag_config:
+        remove_input_tags:
+          - remove_input
+
+markdown_extensions:
+  - attr_list
+  # Code highlighting handiness
+  - pymdownx.highlight:
+      anchor_linenums: true
+      line_spans: __span
+      pygments_lang_class: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+  - tables
+  # Ensure that there are links to table of contents items
+  - toc:
+      permalink: "#"
+
+watch:
+  - src
+  - README.md
