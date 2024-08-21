@@ -17,14 +17,14 @@ runs:
   using: "composite"
   steps:
     - name: Setup PDM
-      env:
-        HOME: "/home/runner/work"
       id: setup-pdm
       uses: pdm-project/setup-pdm@v4.1
       with:
         python-version: ${{ inputs.python-version }}
         # cache: true
     - name: Install dependencies
+      env:
+        HOME: "/home/runner/work"
       shell: bash
       if: ${{ (inputs.run-pdm-install == 'true')  && (steps.setup-pdm.outputs.cache-hit != 'true') }}
       run: |
