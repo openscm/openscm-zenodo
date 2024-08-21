@@ -37,7 +37,6 @@ Documentation = "https://openscm-zenodo.readthedocs.io/"
 Source = "https://github.com/openscm/openscm-zenodo"
 
 [project.optional-dependencies]
-optional = []
 dev = [
     "mypy>=1.11.1",
     "pre-commit>=3.8.0",
@@ -60,6 +59,7 @@ docs = [
     "jupytext>=1.16.4",
 ]
 notebooks = [
+    "jupyterlab>=4.2.4",
 ]
 tests = [
     "pytest>=8.3.2",
