@@ -49,3 +49,4 @@ repos:
       - id: pdm-export
         args: ['--prod', '-o', 'requirements.txt', '--without-hashes']
       - id: pdm-sync
+        args: [ -G, ":all" ]
