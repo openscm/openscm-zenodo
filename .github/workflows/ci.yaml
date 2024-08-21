@@ -17,17 +17,17 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
-      - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v5
         with:
-          python-version: ${{ matrix.python-version }}
+          fetch-depth: 0
       - name: Setup PDM
         id: setup-pdm
         uses: pdm-project/setup-pdm@v4
         with:
           python-version: ${{ matrix.python-version }}
+          cache: false
       - name: Install dependencies
         run: |
+          pdm install -G :all
           pdm install -G dev -v
           pdm list
       - name: mypy
