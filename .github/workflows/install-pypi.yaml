@@ -42,13 +42,13 @@ jobs:
       run: |
         if grep -q "WARN" stderr.txt; then echo "Warnings in pip install output" && cat stderr.txt && exit 1; else exit 0; fi
     - name: Get version non-windows
-      if: runner.os != 'windows-latest'
+      if: matrix.os != 'windows-latest'
       run: |
         INSTALLED_VERSION=`python -c 'import openscm_zenodo; print(f"v{openscm_zenodo.__version__}")'`
         echo $INSTALLED_VERSION
         echo "INSTALLED_VERSION=$INSTALLED_VERSION" >> $GITHUB_ENV
     - name: Get version windows
-      if: runner.os == 'windows-latest'
+      if: matrix.os == 'windows-latest'
       run: |
         python -c 'import openscm_zenodo; f = open("version.txt"); f.write(f"v{openscm_zenodo.__version__}"); f.close()'
         type version.txt
