@@ -18,3 +18,8 @@ of rst and use slightly different categories.
 -->
 
 <!-- towncrier release notes start -->
+
+## OpenSCM-Zenodo v0.2.0 (2024-08-21)
+
+
+No significant changes.
