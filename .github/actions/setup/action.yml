@@ -5,13 +5,34 @@ inputs:
   python-version:
     description: "Python version to use"
     required: true
+  pdm-dependency-install-flags:
+    description: "Flags to pass to pdm when running `pdm install`"
+    required: true
+  run-pdm-install:
+    description: "Should we run the pdm install steps"
+    required: false
+    default: true
 
 runs:
   using: "composite"
   steps:
     - name: Setup PDM
       id: setup-pdm
-      uses: pdm-project/setup-pdm@v4
+      uses: pdm-project/setup-pdm@v4.1
       with:
         python-version: ${{ inputs.python-version }}
-        # cache: true
+        cache: true
+    - name: Install dependencies
+      shell: bash
+      if: ${{ (inputs.run-pdm-install == 'true')  && (steps.setup-pdm.outputs.cache-hit != 'true') }}
+      run: |
+        pdm install --no-self ${{ inputs.pdm-dependency-install-flags }}
+    # Now run same command but let the package install too
+    - name: Install package
+      shell: bash
+      # To ensure that the package is always installed, this step is run even if the cache was hit
+      if: ${{ inputs.run-pdm-install == 'true' }}
+      run: |
+        pdm install ${{ inputs.pdm-dependency-install-flags }}
+        pdm run which python
+        pdm run python --version  # Check python version just in case
