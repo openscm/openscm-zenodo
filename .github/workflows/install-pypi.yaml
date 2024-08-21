@@ -50,11 +50,11 @@ jobs:
     - name: Get version windows
       if: matrix.os == 'windows-latest'
       run: |
-        python -c 'import openscm_zenodo; f = open("version.txt", "w"); f.write(f"v{openscm_zenodo.__version__}"); f.close()'
+        chcp 65001  # use utf-8
+        python -c 'import openscm_zenodo; f = open("version.txt", "w"); f.write(f"INSTALLED_VERSION=v{openscm_zenodo.__version__}"); f.close()'
+        echo "Showing version.txt"
         type version.txt
-        set /p INSTALLED_VERSION=<version.txt
-        echo %INSTALLED_VERSION%
-        echo "INSTALLED_VERSION=%INSTALLED_VERSION%" >> $env:GITHUB_ENV
+        type version.txt >> $env:GITHUB_ENV
     - name: Check installed version environment variable
       run: |
         echo "${{ env.INSTALLED_VERSION }}"
