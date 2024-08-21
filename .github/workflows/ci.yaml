@@ -19,10 +19,12 @@ jobs:
       - name: mypy
         run: |
           which pdm
+          pdm run which python
+          pdm run python --version
+          pdm run which pip
           pdm list
           pdm sync -G dev
           pdm list
-          pdm run which python
           MYPYPATH=stubs pdm run mypy src
 
   # docs:
