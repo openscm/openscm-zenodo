@@ -47,7 +47,6 @@ jobs:
         INSTALLED_VERSION=`python -c 'import openscm_zenodo; print(f"v{openscm_zenodo.__version__}")'`
         echo $INSTALLED_VERSION
         echo "INSTALLED_VERSION=$INSTALLED_VERSION" >> $GITHUB_ENV
-        echo ${{ env.INSTALLED_VERSION }}
     - name: Get version windows
       if: matrix.os == 'windows-latest'
       run: |
@@ -55,9 +54,10 @@ jobs:
         type version.txt
         set /p INSTALLED_VERSION=<version.txt
         echo %INSTALLED_VERSION%
-        echo ("INSTALLED_VERSION=%INSTALLED_VERSION%") >> $env:GITHUB_ENV
+        echo "INSTALLED_VERSION=%INSTALLED_VERSION%" >> $env:GITHUB_ENV
+    - name: Check installed version environment variable
+      run: |
         echo "${{ env.INSTALLED_VERSION }}"
-        echo $env:INSTALLED_VERSION
     - name: Checkout repository
       uses: actions/checkout@v4
       with:
