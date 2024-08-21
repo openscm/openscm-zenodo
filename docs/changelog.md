@@ -19,6 +19,14 @@ of rst and use slightly different categories.
 
 <!-- towncrier release notes start -->
 
+## OpenSCM-Zenodo v0.2.2 (2024-08-21)
+
+
+### 🔧 Trivial/Internal Changes
+
+- [#8](https://github.com/climate-resource/input4mips_validation/pulls/8)
+
+
 ## OpenSCM-Zenodo v0.2.1 (2024-08-21)
 
 
