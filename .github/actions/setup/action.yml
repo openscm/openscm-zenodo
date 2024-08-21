@@ -22,17 +22,17 @@ runs:
       with:
         python-version: ${{ inputs.python-version }}
         # cache: true
-    # - name: Install dependencies
-    #   if: ${{ (inputs.run-pdm-install == 'true')  && (steps.setup-pdm.outputs.cache-hit != 'true') }}
-    #   run: |
-    #     pdm info
-    #     pdm show
-    #     pdm list
-    #     pdm --non-interactive install --no-self ${{ inputs.pdm-dependency-install-flags }}
-    # # Now run same command but let the package install too
-    # - name: Install package
-    #   # To ensure that the package is always installed, this step is run even if the cache was hit
-    #   if: ${{ inputs.run-pdm-install == 'true' }}
-    #   run: |
-    #     pdm --non-interactive install ${{ inputs.pdm-dependency-install-flags }}
-    #     pdm run python --version  # Check python version just in case
+    - name: Install dependencies
+      if: ${{ (inputs.run-pdm-install == 'true')  && (steps.setup-pdm.outputs.cache-hit != 'true') }}
+      run: |
+        pdm info
+        pdm show
+        pdm list
+        pdm sync --no-self ${{ inputs.pdm-dependency-install-flags }}
+    # Now run same command but let the package install too
+    - name: Install package
+      # To ensure that the package is always installed, this step is run even if the cache was hit
+      if: ${{ inputs.run-pdm-install == 'true' }}
+      run: |
+        pdm --non-interactive sync ${{ inputs.pdm-dependency-install-flags }}
+        pdm run python --version  # Check python version just in case

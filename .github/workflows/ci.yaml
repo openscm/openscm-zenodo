@@ -16,7 +16,7 @@ jobs:
       - uses: ./.github/actions/setup
         with:
           python-version: "3.11"
-          pdm-dependency-install-flags: "-G dev"
+          pdm-dependency-install-flags: "-d --G dev"
       - name: mypy
         run: |
           pdm install -G dev
