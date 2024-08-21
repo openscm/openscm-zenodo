@@ -11,7 +11,7 @@ runs:
   steps:
     - name: Setup PDM
       id: setup-pdm
-      uses: pdm-project/setup-pdm@v4.1
+      uses: pdm-project/setup-pdm@v4
       with:
         python-version: ${{ inputs.python-version }}
-        cache: true
+        # cache: true
