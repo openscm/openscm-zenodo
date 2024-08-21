@@ -18,7 +18,11 @@ jobs:
           python-version: "3.11"
       - name: mypy
         run: |
+          which pdm
+          pdm list
           pdm sync -G dev
+          pdm list
+          pdm run which python
           MYPYPATH=stubs pdm run mypy src
 
   # docs:
