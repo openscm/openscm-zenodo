@@ -80,5 +80,5 @@ licence-check:  ## Check that licences of the dependencies are suitable
 
 .PHONY: virtual-environment
 virtual-environment:  ## update virtual environment, create a new one if it doesn't already exist
-	pdm install
+	pdm install -G :all
 	pdm run pre-commit install
