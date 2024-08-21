@@ -20,7 +20,7 @@ jobs:
           python-version: "3.11"
           update-python: false
       - name: Check Python version
-        run:
+        run: |
           which pdm
           pdm run which python
           pdm run python --version
