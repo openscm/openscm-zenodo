@@ -23,6 +23,7 @@ runs:
         python-version: ${{ inputs.python-version }}
         # cache: true
     - name: Install dependencies
+      shell: bash
       if: ${{ (inputs.run-pdm-install == 'true')  && (steps.setup-pdm.outputs.cache-hit != 'true') }}
       run: |
         pdm info
@@ -31,8 +32,9 @@ runs:
         pdm sync --no-self ${{ inputs.pdm-dependency-install-flags }}
     # Now run same command but let the package install too
     - name: Install package
+      shell: bash
       # To ensure that the package is always installed, this step is run even if the cache was hit
       if: ${{ inputs.run-pdm-install == 'true' }}
       run: |
-        pdm --non-interactive sync ${{ inputs.pdm-dependency-install-flags }}
+        pdm sync ${{ inputs.pdm-dependency-install-flags }}
         pdm run python --version  # Check python version just in case
