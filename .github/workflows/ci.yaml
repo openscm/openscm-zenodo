@@ -19,6 +19,12 @@ jobs:
         with:
           python-version: "3.11"
           update-python: false
+      - name: Check Python version
+        run:
+          which pdm
+          pdm run which python
+          pdm run python --version
+          pdm run which pip
       - name: Install dependencies
         run: |
           which pdm
