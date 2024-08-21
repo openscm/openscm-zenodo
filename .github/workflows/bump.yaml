@@ -24,7 +24,7 @@ jobs:
     if: "!startsWith(github.event.head_commit.message, 'bump:')"
     runs-on: ubuntu-latest
     env:
-      CI_COMMIT_EMAIL: "ci-runner@input4mips-validation.invalid"
+      CI_COMMIT_EMAIL: "ci-runner@openscm-zenodo.invalid"
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
