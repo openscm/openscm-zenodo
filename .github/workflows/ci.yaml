@@ -19,7 +19,7 @@ jobs:
           pdm-dependency-install-flags: "-d -G dev"
       - name: mypy
         run: |
-          pdm install -G dev
+          pdm sync -G dev
           MYPYPATH=stubs pdm run mypy src
 
   docs:
