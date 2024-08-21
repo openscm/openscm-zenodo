@@ -18,7 +18,6 @@ runs:
   steps:
     - name: Setup PDM
       id: setup-pdm
-      shell: bash
       uses: pdm-project/setup-pdm@v4.1
       with:
         python-version: ${{ inputs.python-version }}
