@@ -1,6 +1,9 @@
 # pdm stuff
 .pdm-python
 
+# CI stuff
+pdm-install-flags.txt
+
 # licence check
 licence-check.txt
 
