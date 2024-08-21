@@ -9,7 +9,6 @@ on:
 jobs:
   mypy:
     if: ${{ !github.event.pull_request.draft }}
-    runs-on: ubuntu-latest
     matrix:
       os: [ "ubuntu-latest" ]
       python-version: [ "3.11" ]
