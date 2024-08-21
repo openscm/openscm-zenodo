@@ -27,12 +27,6 @@ jobs:
           pdm run which pip
       - name: Install dependencies
         run: |
-          which pdm
-          pdm run which python
-          pdm run python --version
-          pdm add pip
-          pdm run which pip
-          pdm list
           pdm sync -d -G dev
           pdm list
       - name: mypy
