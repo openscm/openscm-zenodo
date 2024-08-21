@@ -17,6 +17,8 @@ runs:
   using: "composite"
   steps:
     - name: Setup PDM
+      env:
+        HOME: "/home/runner/work"
       id: setup-pdm
       uses: pdm-project/setup-pdm@v4.1
       with:
