@@ -54,7 +54,7 @@ jobs:
         type version.txt
         set /p INSTALLED_VERSION=<version.txt
         echo %INSTALLED_VERSION%
-        echo ("INSTALLED_VERSION=" + %INSTALLED_VERSION%") >> $env:GITHUB_ENV
+        echo ("INSTALLED_VERSION=%INSTALLED_VERSION%") >> $env:GITHUB_ENV
     - name: Checkout repository
       uses: actions/checkout@v4
       with:
