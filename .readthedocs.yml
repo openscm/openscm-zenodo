@@ -21,6 +21,9 @@ build:
       - pdm export -f requirements --output requirements.txt --with docs
       - python -m pip install -r requirements.txt
       - python -m pip list
+    pre_build:
+      - pip install --no-deps .
+      - typer openscm_zenodo.cli utils docs --output docs/cli/index.md --name openscm-zenodo
 
 mkdocs:
   configuration: mkdocs.yml
