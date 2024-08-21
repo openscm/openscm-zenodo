@@ -50,7 +50,7 @@ jobs:
     - name: Get version windows
       if: matrix.os == 'windows-latest'
       run: |
-        python -c 'import openscm_zenodo; f = open("version.txt"); f.write(f"v{openscm_zenodo.__version__}"); f.close()'
+        python -c 'import openscm_zenodo; f = open("version.txt", "w"); f.write(f"v{openscm_zenodo.__version__}"); f.close()'
         type version.txt
         set /p INSTALLED_VERSION=<version.txt
         echo %INSTALLED_VERSION%
