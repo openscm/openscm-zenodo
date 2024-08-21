@@ -11,8 +11,18 @@ jobs:
     if: ${{ !github.event.pull_request.draft }}
     runs-on: ubuntu-latest
     steps:
+      - name: Check Python version
+        run: |
+          which pdm
+          which python
+          which pip
       - name: Check out repository
         uses: actions/checkout@v4
+      - name: Check Python version
+        run: |
+          which pdm
+          which python
+          which pip
       - name: Setup PDM
         id: setup-pdm
         uses: pdm-project/setup-pdm@v4
