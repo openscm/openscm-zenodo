@@ -35,8 +35,8 @@ jobs:
           pdm run which pip
       - name: Install dependencies
         run: |
-          pdm sync -d -G dev
-          pdm list
+          pdm sync -d -G dev -v
+          pdm list -v
       - name: mypy
         run: |
           MYPYPATH=stubs pdm run mypy src
