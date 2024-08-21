@@ -48,7 +48,7 @@ jobs:
         echo $INSTALLED_VERSION
         echo "INSTALLED_VERSION=$INSTALLED_VERSION" >> $GITHUB_ENV
     - name: Get version windows
-      if: runner.os -= 'windows-latest'
+      if: runner.os != 'windows-latest'
       run: |
         python -c 'import openscm_zenodo; f = open("version.txt"); f.write(f"v{openscm_zenodo.__version__}"); f.close()'
         type version.txt
