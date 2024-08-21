@@ -18,7 +18,9 @@ jobs:
           python-version: "3.11"
           pdm-dependency-install-flags: "-G dev"
       - name: mypy
-        run: MYPYPATH=stubs pdm run mypy src
+        run: |
+          pdm install -G dev
+          MYPYPATH=stubs pdm run mypy src
 
   docs:
     if: ${{ !github.event.pull_request.draft }}
