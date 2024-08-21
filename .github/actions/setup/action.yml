@@ -26,6 +26,9 @@ runs:
       if: ${{ (inputs.run-pdm-install == 'true')  && (steps.setup-pdm.outputs.cache-hit != 'true') }}
       shell: bash
       run: |
+        pdm info
+        pdm show
+        pdm list
         pdm --non-interactive install --no-self ${{ inputs.pdm-dependency-install-flags }}
     # Now run same command but let the package install too
     - name: Install package
