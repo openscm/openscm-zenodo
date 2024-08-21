@@ -116,7 +116,7 @@ jobs:
       - uses: ./.github/actions/setup
         with:
           python-version: "3.9"
-          pdm-dependency-install-flags: "-G dev"
+          pdm-dependency-install-flags: "-G dev -G notebooks"
       - name: Check licences of dependencies
         shell: bash
         run: |
