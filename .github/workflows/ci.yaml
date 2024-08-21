@@ -13,14 +13,12 @@ jobs:
     steps:
       - name: Check Python version
         run: |
-          which pdm
           which python
           which pip
       - name: Check out repository
         uses: actions/checkout@v4
       - name: Check Python version
         run: |
-          which pdm
           which python
           which pip
       - name: Setup PDM
