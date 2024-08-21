@@ -13,18 +13,22 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
-      - uses: ./.github/actions/setup
+      - name: Setup PDM
+        id: setup-pdm
+        uses: pdm-project/setup-pdm@v4
         with:
           python-version: "3.11"
-      - name: mypy
+      - name: Install dependencies
         run: |
           which pdm
           pdm run which python
           pdm run python --version
           pdm run which pip
           pdm list
-          pdm sync -G dev
+          pdm sync -d -G dev
           pdm list
+      - name: mypy
+        run: |
           MYPYPATH=stubs pdm run mypy src
 
   # docs:
