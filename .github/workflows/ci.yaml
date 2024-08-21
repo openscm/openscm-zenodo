@@ -116,11 +116,11 @@ jobs:
       - uses: ./.github/actions/setup
         with:
           python-version: "3.9"
-          pdm-dependency-install-flags: "-G dev -G notebooks"
+          pdm-dependency-install-flags: "-G dev"
       - name: Check licences of dependencies
         shell: bash
         run: |
           TEMP_FILE=$(mktemp)
-          pdm export --without=tests --without=docs --without=dev > $TEMP_FILE
+          pdm export --prod > $TEMP_FILE
           pdm run liccheck -r $TEMP_FILE -R licence-check.txt
           cat licence-check.txt
