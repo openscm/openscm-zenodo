@@ -17,6 +17,7 @@ runs:
   using: "composite"
   steps:
     - name: Write file with install flags
+      shell: bash
       run: |
         echo "${{ inputs.pdm-dependency-install-flags }}" > pdm-install-flags.txt
     - name: Setup PDM
