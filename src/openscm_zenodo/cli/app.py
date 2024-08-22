@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Annotated, Optional
 
 import typer
+from loguru import logger
 from typing_extensions import TypeAlias
 
 import openscm_zenodo
@@ -165,23 +166,57 @@ def update_metadata_command(
     metadata_file: METADATA_FILE_TYPE,
     token: TOKEN_TYPE,
     zenodo_domain: ZENODO_DOMAIN_TYPE = ZenodoDomain.production,
+    reserve_doi: Annotated[
+        bool,
+        typer.Option(
+            "--reserve-doi",
+            help=(
+                "Reserve a DOI while updating the metadata. "
+                "This will overwrite any value in the metadata file supplied."
+            ),
+        ),
+    ] = False,
 ) -> None:
     """
     Update metadata
-    """
-    if metadata_file is not None:
-        with open(metadata_file) as fh:
-            metadata = json.load(fh)
 
-    else:
-        metadata = None
+    If the `--reserve-doi` flag is used,
+    this prints the reserved DOI to stdout.
+    """
+    if metadata_file is None:
+        msg = "A value must be provided for `metadata-file`"
+
+        raise ValueError(msg)
+
+    with open(metadata_file) as fh:
+        metadata = json.load(fh)
+
+    if reserve_doi:
+        if (
+            "prereserve_doi" in metadata["metadata"]
+            and not metadata["metadata"]["prereserve_doi"]
+        ):
+            logger.warning(
+                f"The supplied metadata has {metadata['metadata']['prereserve_doi']=}, "
+                "this will be overwritten by the `--reserve-doi` flag"
+            )
+
+        metadata["metadata"]["prereserve_doi"] = True
 
     zenoodo_interactor = ZenodoInteractor(
         token=token,
         zenodo_domain=zenodo_domain,
     )
 
-    zenoodo_interactor.update_metadata(deposition_id, metadata=metadata)
+    update_metadata_response = zenoodo_interactor.update_metadata(
+        deposition_id, metadata=metadata
+    )
+
+    if reserve_doi:
+        reserved_doi = update_metadata_response.json()["metadata"]["prereserve_doi"][
+            "doi"
+        ]
+        print(reserved_doi)
 
 
 @app.command(name="upload-files")
