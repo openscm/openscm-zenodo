@@ -158,7 +158,7 @@ unauthorized_licenses = [
 
 [project]
 name = "openscm-zenodo"
-version = "0.2.4"
+version = "0.2.6a1"
 description = "Command-line tool for uploading to zenodo"
 keywords = [
     "zenodo",
