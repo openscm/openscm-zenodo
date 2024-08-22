@@ -189,7 +189,7 @@ def update_metadata_command(
     this prints the reserved DOI to stdout.
     """
     if metadata_file is None:
-        msg = "A value must be provided for `metadata-file`"
+        msg = "A value must be provided for `--metadata-file`"
 
         raise ValueError(msg)
 
