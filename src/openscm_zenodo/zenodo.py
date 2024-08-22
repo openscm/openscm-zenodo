@@ -928,3 +928,26 @@ def create_new_version(
         zenoodo_interactor.publish(new_deposition_id)
 
     return str(new_deposition_id)
+
+
+def get_reserved_doi(zenodo_record_response: requests.models.Response) -> str:
+    """
+    Get the reserved DOI from a Zenodo record response
+
+    We think that this works
+    with basically any response related to retrieving a record from Zenodo,
+    because it basically just looks at the metadata field.
+    However, it may not support all responses.
+    You have been warned.
+
+    Parameters
+    ----------
+    zenodo_record_response
+        The Zenodo response for a record, from which to get the reserved DOI.
+
+    Returns
+    -------
+    :
+        The record's reserved DOI
+    """
+    return zenodo_record_response.json()["metadata"]["prereserve_doi"]["doi"]

@@ -10,7 +10,7 @@ import os
 import pytest
 import requests
 
-from openscm_zenodo.zenodo import ZenodoDomain, ZenodoInteractor
+from openscm_zenodo.zenodo import ZenodoDomain, ZenodoInteractor, get_reserved_doi
 
 
 @pytest.mark.zenodo_token
@@ -58,7 +58,7 @@ def test_default_end_to_end_flow(test_data_dir):
     assert isinstance(update_metadata_response, requests.models.Response)
 
     # Just a test that this exists really, but handy trick to know
-    reserved_doi = update_metadata_response.json()["metadata"]["prereserve_doi"]["doi"]
+    reserved_doi = get_reserved_doi(update_metadata_response)
     assert "10.5281/zenodo" in reserved_doi
 
     bucket_url = zenoodo_interactor.get_bucket_url(deposition_id=new_deposition_id)
