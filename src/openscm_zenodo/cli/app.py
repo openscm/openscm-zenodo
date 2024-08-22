@@ -15,7 +15,12 @@ from typing_extensions import TypeAlias
 
 import openscm_zenodo
 from openscm_zenodo.logging import setup_logging
-from openscm_zenodo.zenodo import ZenodoDomain, ZenodoInteractor, create_new_version
+from openscm_zenodo.zenodo import (
+    ZenodoDomain,
+    ZenodoInteractor,
+    create_new_version,
+    get_reserved_doi,
+)
 
 app = typer.Typer()
 
@@ -213,10 +218,7 @@ def update_metadata_command(
     )
 
     if reserve_doi:
-        reserved_doi = update_metadata_response.json()["metadata"]["prereserve_doi"][
-            "doi"
-        ]
-        print(reserved_doi)
+        print(get_reserved_doi(update_metadata_response))
 
 
 @app.command(name="upload-files")
