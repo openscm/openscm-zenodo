@@ -57,6 +57,10 @@ def test_default_end_to_end_flow(test_data_dir):
     )
     assert isinstance(update_metadata_response, requests.models.Response)
 
+    # Just a test that this exists really, but handy trick to know
+    reserved_doi = update_metadata_response.json()["metadata"]["prereserve_doi"]["doi"]
+    assert "10.5281/zenodo" in reserved_doi
+
     bucket_url = zenoodo_interactor.get_bucket_url(deposition_id=new_deposition_id)
 
     for file in files_to_upload:
@@ -71,15 +75,18 @@ def test_default_end_to_end_flow(test_data_dir):
 
     publish_response_json = publish_response.json()
 
-    assert publish_response_json["id"] == new_deposition_id
-    comparable_metadata_from_publish_response = {
-        "metadata": {
-            k: v
-            for k, v in publish_response_json["metadata"].items()
-            if k in metadata["metadata"]
-        }
+    # These keys differ in the response because they are updated by Zenodo
+    zenodo_altered_keys = ["prereserve_doi"]
+
+    comparable_metadata_from_user = {
+        k: v for k, v in metadata["metadata"].items() if k not in zenodo_altered_keys
     }
-    assert comparable_metadata_from_publish_response == metadata
+    comparable_metadata_from_publish_response = {
+        k: v
+        for k, v in publish_response_json["metadata"].items()
+        if k in metadata["metadata"] and k not in zenodo_altered_keys
+    }
+    assert comparable_metadata_from_user == comparable_metadata_from_publish_response
 
     assert len(publish_response_json["files"]) == len(files_to_upload)
     # Zenodo doesn't support directories, so uploaded files should be flat.

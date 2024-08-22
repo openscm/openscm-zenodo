@@ -61,12 +61,20 @@ def test_default_end_to_end_flow_cli(test_data_dir):
     ).json()
 
     with open(metadata_file) as fh:
-        metadata = json.load(fh)["metadata"]
+        metadata = json.load(fh)
 
-    comparable_metadata_from_publish_response = {
-        k: v for k, v in publish_response_json["metadata"].items() if k in metadata
+    # These keys differ in the response because they are updated by Zenodo
+    zenodo_altered_keys = ["prereserve_doi"]
+
+    comparable_metadata_from_user = {
+        k: v for k, v in metadata["metadata"].items() if k not in zenodo_altered_keys
     }
-    assert comparable_metadata_from_publish_response == metadata
+    comparable_metadata_from_publish_response = {
+        k: v
+        for k, v in publish_response_json["metadata"].items()
+        if k in metadata["metadata"] and k not in zenodo_altered_keys
+    }
+    assert comparable_metadata_from_user == comparable_metadata_from_publish_response
 
     assert len(publish_response_json["files"]) == len(files_to_upload)
     # Zenodo doesn't support directories, so uploaded files should be flat.
