@@ -950,4 +950,4 @@ def get_reserved_doi(zenodo_record_response: requests.models.Response) -> str:
     :
         The record's reserved DOI
     """
-    return zenodo_record_response.json()["metadata"]["prereserve_doi"]["doi"]
+    return str(zenodo_record_response.json()["metadata"]["prereserve_doi"]["doi"])
