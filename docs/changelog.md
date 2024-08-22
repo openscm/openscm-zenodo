@@ -19,6 +19,19 @@ of rst and use slightly different categories.
 
 <!-- towncrier release notes start -->
 
+## OpenSCM-Zenodo v0.2.4 (2024-08-22)
+
+
+### 🆕 Features
+
+- Added the `--reserve-doi` flag to the `openscm-zenodo update-metadata` command.
+  Also added [`get_reserved_doi`][openscm_zenodo.zenodo.get_reserved_doi]. ([#10](https://github.com/climate-resource/input4mips_validation/pulls/10))
+
+### 🔧 Trivial/Internal Changes
+
+- [#10](https://github.com/climate-resource/input4mips_validation/pulls/10)
+
+
 ## OpenSCM-Zenodo v0.2.3 (2024-08-21)
 
 
