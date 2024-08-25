@@ -165,6 +165,25 @@ def retrieve_metadata_command(
     print(json.dumps(metadata, indent=2, sort_keys=True))
 
 
+@app.command(name="retrieve-bibtex")
+def retrieve_bibtex_command(
+    deposition_id: DEPOSITION_ID_TYPE,
+    token: TOKEN_TYPE = None,
+    zenodo_domain: ZENODO_DOMAIN_TYPE = ZenodoDomain.production,
+) -> None:
+    """
+    Retrieve bibtex entry
+    """
+    zenoodo_interactor = ZenodoInteractor(
+        token=token,
+        zenodo_domain=zenodo_domain,
+    )
+
+    bibtex_entry = zenoodo_interactor.get_bibtex_entry(deposition_id)
+
+    print(bibtex_entry)
+
+
 @app.command(name="update-metadata")
 def update_metadata_command(
     deposition_id: DEPOSITION_ID_TYPE,

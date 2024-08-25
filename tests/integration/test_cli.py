@@ -123,6 +123,38 @@ def test_retrieve_metadata(test_data_dir):
     assert res.stdout == f"{json.dumps(exp, indent=2, sort_keys=True)}\n"
 
 
+def test_retrieve_bibtex(test_data_dir):
+    """
+    Test we can retrieve a bibtex entry from Zenodo
+    """
+    deposition_id = "4589756"
+
+    res = runner.invoke(
+        app,
+        [
+            "retrieve-bibtex",
+            deposition_id,
+        ],
+    )
+    assert res.exit_code == 0, res.stderr
+    exp = """@dataset{zebedee_nicholls_2021_4589756,
+  author       = {Zebedee Nicholls and
+                  Jared Lewis},
+  title        = {{Reduced Complexity Model Intercomparison Project
+                   (RCMIP) protocol}},
+  month        = mar,
+  year         = 2021,
+  publisher    = {Zenodo},
+  version      = {v5.1.0},
+  doi          = {10.5281/zenodo.4589756},
+  url          = {https://doi.org/10.5281/zenodo.4589756}
+}"""
+
+    # The result has trailing whitespace, which we remove here
+    res_compare = "\n".join([v.rstrip() for v in res.stdout.splitlines()])
+    assert res_compare == exp
+
+
 @pytest.mark.zenodo_token
 def test_update_metadata(tmp_path):
     """
