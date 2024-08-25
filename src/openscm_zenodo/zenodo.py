@@ -140,9 +140,6 @@ class ZenodoInteractor:
             f"{mask_token(url_to_hit, token=self.token)}"
         )
 
-        # # To get bibtex, hit something like this.
-        # # Will need a new method.
-        # url_to_hit = "https://zenodo.org/records/10705513/export/bibtex"
         requests_kwargs = dict(
             params=params,
             **kwargs,
@@ -248,6 +245,30 @@ class ZenodoInteractor:
         metadata = {"metadata": deposition.json()["metadata"]}
 
         return metadata
+
+    def get_bibtex_entry(
+        self,
+        deposition_id: str,
+    ) -> MetadataType:
+        """
+        Get the bibtex entry for a given deposition ID
+
+        Parameters
+        ----------
+        deposition_id
+            The ID of the deposition
+
+        Returns
+        -------
+        :
+            Bibtex entry for `deposition_id`.
+        """
+        logger.info(f"Retrieving bibtex entry for {deposition_id=!r}")
+        response = self.get_response(f"/records/{deposition_id}/export/bibtex")
+
+        bibtex_entry = response.text
+
+        return bibtex_entry
 
     def get_latest_deposition_id(
         self,
@@ -795,8 +816,8 @@ def retrieve_metadata(
     --------
     >>> import json
     >>> res_raw = retrieve_metadata("4589756")
-    >>> res_disp = json.dumps(res_raw, indent=2, sort_keys=True)
-    >>> print(res_disp)
+    >>> res_json = json.dumps(res_raw, indent=2, sort_keys=True)
+    >>> print(res_json)
     {
       "metadata": {
         "access_right": "open",
@@ -854,6 +875,54 @@ def retrieve_metadata(
         zenoodo_interactor = ZenodoInteractor()
 
     return zenoodo_interactor.get_metadata(deposition_id)
+
+
+def retrieve_bibtex_entry(
+    deposition_id: str,
+    zenoodo_interactor: Optional[ZenodoInteractor] = None,
+) -> str:
+    r"""
+    Retrieve the bibtext entry associated with a given deposition ID
+
+    Parameters
+    ----------
+    deposition_id
+        The ID of the deposition
+
+    zenoodo_interactor
+        Object to use to interact with Zenodo.
+
+        If not supplied, we use a default interactor with no authentication.
+
+    Returns
+    -------
+    :
+        Bibtex entry for deposition ID `deposition_id`.
+
+    Examples
+    --------
+    >>> res = retrieve_bibtex_entry("4589756")
+    >>> # There are trailing newlines in the Zenodo response.
+    >>> # We strip them here
+    >>> res_disp = "\n".join([v.rstrip() for v in res.splitlines()])
+    >>> print(res_disp)
+    @dataset{zebedee_nicholls_2021_4589756,
+      author       = {Zebedee Nicholls and
+                      Jared Lewis},
+      title        = {{Reduced Complexity Model Intercomparison Project
+                       (RCMIP) protocol}},
+      month        = mar,
+      year         = 2021,
+      publisher    = {Zenodo},
+      version      = {v5.1.0},
+      doi          = {10.5281/zenodo.4589756},
+      url          = {https://doi.org/10.5281/zenodo.4589756}
+    }
+    """  # noqa: #E501
+    if zenoodo_interactor is None:
+        zenoodo_interactor = ZenodoInteractor()
+
+    return zenoodo_interactor.get_bibtex_entry(deposition_id)
 
 
 def create_new_version(  # noqa: PLR0913
