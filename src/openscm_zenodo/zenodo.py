@@ -249,7 +249,7 @@ class ZenodoInteractor:
     def get_bibtex_entry(
         self,
         deposition_id: str,
-    ) -> MetadataType:
+    ) -> str:
         """
         Get the bibtex entry for a given deposition ID
 

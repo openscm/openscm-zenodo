@@ -7,7 +7,7 @@ CLI app
 
 import json
 from pathlib import Path
-from typing import Annotated, Optional
+from typing import Annotated, Optional, Union
 
 import typer
 from loguru import logger
@@ -69,7 +69,7 @@ N_THREADS_TYPE: TypeAlias = Annotated[
 ]
 
 TOKEN_TYPE: TypeAlias = Annotated[
-    str,
+    Union[str, None],
     typer.Option(
         envvar="ZENODO_TOKEN",
         help=(
