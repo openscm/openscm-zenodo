@@ -140,6 +140,9 @@ class ZenodoInteractor:
             f"{mask_token(url_to_hit, token=self.token)}"
         )
 
+        # # To get bibtex, hit something like this.
+        # # Will need a new method.
+        # url_to_hit = "https://zenodo.org/records/10705513/export/bibtex"
         requests_kwargs = dict(
             params=params,
             **kwargs,
@@ -853,12 +856,13 @@ def retrieve_metadata(
     return zenoodo_interactor.get_metadata(deposition_id)
 
 
-def create_new_version(
+def create_new_version(  # noqa: PLR0913
     any_deposition_id: str,
     zenoodo_interactor: ZenodoInteractor,
     metadata: Optional[MetadataType] = None,
     publish: bool = False,
     files_to_upload: Optional[list[Path]] = None,
+    n_threads: int = 4,
 ) -> str:
     """
     Create a new version of a given record
@@ -895,6 +899,10 @@ def create_new_version(
     files_to_upload
         If supplied, the files to upload to the newly created version.
 
+    n_threads
+        If `files_to_upload` is supplied,
+        the number of threads to use for parallel uploads.
+
     Returns
     -------
     :
@@ -915,14 +923,11 @@ def create_new_version(
         )
 
     if files_to_upload is not None:
-        # Split into upload files
-        bucket_url = zenoodo_interactor.get_bucket_url(deposition_id=new_deposition_id)
-
-        for file in files_to_upload:
-            zenoodo_interactor.upload_file_to_bucket_url(
-                file,
-                bucket_url=bucket_url,
-            )
+        zenoodo_interactor.upload_files(
+            deposition_id=new_deposition_id,
+            to_upload=files_to_upload,
+            n_threads=n_threads,
+        )
 
     if publish:
         zenoodo_interactor.publish(new_deposition_id)
