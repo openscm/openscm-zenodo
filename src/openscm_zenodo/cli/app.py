@@ -149,7 +149,7 @@ If supplied, this overrides any value provided with `--log-level`."""
 @app.command(name="retrieve-metadata")
 def retrieve_metadata_command(
     deposition_id: DEPOSITION_ID_TYPE,
-    token: TOKEN_TYPE,
+    token: TOKEN_TYPE = None,
     zenodo_domain: ZENODO_DOMAIN_TYPE = ZenodoDomain.production,
 ) -> None:
     """
@@ -315,9 +315,10 @@ def create_new_version_command(  # noqa: PLR0913
     ] = False,
     zenodo_domain: ZENODO_DOMAIN_TYPE = ZenodoDomain.production,
     files_to_upload: FILES_TO_UPLOAD_TYPE = None,
+    n_threads: N_THREADS_TYPE = 4,
 ) -> None:
     """
-    Create a new version of a recod
+    Create a new version of a record
     """
     if metadata_file is not None:
         with open(metadata_file) as fh:
@@ -337,61 +338,7 @@ def create_new_version_command(  # noqa: PLR0913
         zenoodo_interactor=zenoodo_interactor,
         publish=publish,
         files_to_upload=files_to_upload,
+        n_threads=n_threads,
     )
 
     print(new_deposit_id)
-
-
-# @app.command(name="get-bucket-id")
-# def get_bucket_id_command(
-#     deposit_id: DEPOSIT_ID_TYPE,
-#     token: TOKEN_TYPE,
-#     zenodo_url: ZENODO_URL_TYPE = ZenodoDomain.production,
-# ) -> None:
-#     """
-#     Get the bucket associated with a given Zenodo deposit
-#     """
-#     bucket_id = get_bucket_id(
-#         deposition_id=deposit_id, zenodo_url=zenodo_url, token=token
-#     )
-#
-#     typer.echo(bucket_id)
-#
-#
-# @app.command(name="upload-file")
-# def upload_file_command(
-#     file_to_upload: Annotated[
-#         Path,
-#         typer.Option(
-#             exists=True,
-#             dir_okay=False,
-#             readable=True,
-#             resolve_path=True,
-#             help="File to upload.",
-#         ),
-#     ],
-#     bucket_id: BUCKET_ID_TYPE,
-#     token: TOKEN_TYPE,
-#     dir_to_strip: Annotated[
-#         Optional[Path],
-#         typer.Option(
-#             help=(
-#                 "If supplied, "
-#                 "this directory is removed from file paths before uploading."
-#             ),
-#             exists=True,
-#             file_okay=False,
-#         ),
-#     ] = None,
-#     zenodo_url: ZENODO_URL_TYPE = ZenodoDomain.production,
-# ) -> None:
-#     """
-#     Upload a file to Zenodo
-#     """
-#     upload_file(
-#         filepath=file_to_upload,
-#         bucket=bucket_id,
-#         root_dir=dir_to_strip,
-#         zenodo_url=zenodo_url.value,
-#         token=token,
-#     )

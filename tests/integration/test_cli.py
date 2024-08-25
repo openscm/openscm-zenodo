@@ -33,6 +33,8 @@ def test_default_end_to_end_flow_cli(test_data_dir):
             "create-new-version",
             any_deposition_id,
             *[str(f) for f in files_to_upload],
+            "--n-threads",
+            1,
             "--zenodo-domain",
             "https://sandbox.zenodo.org",
             "--publish",
