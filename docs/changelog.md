@@ -19,6 +19,21 @@ of rst and use slightly different categories.
 
 <!-- towncrier release notes start -->
 
+## OpenSCM-Zenodo v0.3.0 (2024-08-25)
+
+
+### 🆕 Features
+
+- Added bibtex metadata retrieval.
+  Specifically: `openscm-zenodo retrieve-bibtex`,
+  [`retrieve_bibtex_entry`][openscm_zenodo.zenodo.retrieve_bibtex_entry]
+  and [`get_bibtex_entry`][openscm_zenodo.zenodo.ZenodoInteractor.get_bibtex_entry]. ([#12](https://github.com/climate-resource/input4mips_validation/pulls/12))
+
+### 🎉 Improvements
+
+- Added support for parallel uploads to `openscm-zenodo create-new-version`. ([#12](https://github.com/climate-resource/input4mips_validation/pulls/12))
+
+
 ## OpenSCM-Zenodo v0.2.6 (2024-08-22)
 
 
