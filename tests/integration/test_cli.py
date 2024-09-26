@@ -123,6 +123,36 @@ def test_retrieve_metadata(test_data_dir):
     assert res.stdout == f"{json.dumps(exp, indent=2, sort_keys=True)}\n"
 
 
+@pytest.mark.zenodo_token
+def test_retrieve_metadata_user_controlled_only(test_data_dir):
+    """
+    Test we can retrieve only user-controlled metadata from Zenodo
+    """
+    deposition_id = "101709"
+
+    res = runner.invoke(
+        app,
+        [
+            "retrieve-metadata",
+            deposition_id,
+            "--zenodo-domain",
+            "https://sandbox.zenodo.org",
+            "--user-controlled-only",
+        ],
+    )
+    assert res.exit_code == 0, res.stderr
+    exp = {
+        "metadata": {
+            "access_right": "open",
+            "creators": [{"affiliation": None, "name": "Nicholls, Zebedee"}],
+            "license": "cc-by-4.0",
+            "title": "OpenSCM-Zenodo testing 0",
+            "upload_type": "dataset",
+        }
+    }
+    assert res.stdout == f"{json.dumps(exp, indent=2, sort_keys=True)}\n"
+
+
 def test_retrieve_bibtex(test_data_dir):
     """
     Test we can retrieve a bibtex entry from Zenodo
