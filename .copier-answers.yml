@@ -1,5 +1,5 @@
 # Changes here will be overwritten by Copier; NEVER EDIT MANUALLY
-_commit: v0.4.0
+_commit: v0.4.1
 _src_path: gl:znicholls/copier-core-python-repository
 email: zebedee.nicholls@climate-energy-college.org
 include_cli: true
