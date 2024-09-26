@@ -940,7 +940,7 @@ def retrieve_bibtex_entry(
       doi          = {10.5281/zenodo.4589756},
       url          = {https://doi.org/10.5281/zenodo.4589756}
     }
-    """  # noqa: #E501
+    """
     if zenoodo_interactor is None:
         zenoodo_interactor = ZenodoInteractor()
 

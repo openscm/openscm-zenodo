@@ -32,9 +32,9 @@ checks:  ## run all the linting checks of the codebase
 ruff-fixes:  ## fix the code using ruff
     # format before and after checking so that the formatted stuff is checked and
     # the fixed stuff is formatted
-	pdm run ruff format src tests scripts
-	pdm run ruff check src tests scripts --fix
-	pdm run ruff format src tests scripts
+	pdm run ruff format src tests scripts docs
+	pdm run ruff check src tests scripts docs --fix
+	pdm run ruff format src tests scripts docs
 
 
 .PHONY: test
@@ -42,14 +42,20 @@ test:  ## run the tests
 	pdm run pytest src tests -r a -v --doctest-modules --cov=src
 
 # Note on code coverage and testing:
-# You must specify cov=src as otherwise funny things happen when doctests are
-# involved.
-# If you want to debug what is going on with coverage, we have found
-# that adding COVERAGE_DEBUG=trace to the front of the above command
-# can be very helpful as it shows you if coverage is tracking the coverage
+# You must specify cov=src.
+# Otherwise, funny things happen when doctests are involved.
+# If you want to debug what is going on with coverage,
+# we have found that adding COVERAGE_DEBUG=trace
+# to the front of the below command
+# can be very helpful as it shows you
+# if coverage is tracking the coverage
 # of all of the expected files or not.
-# We are sure that the coverage maintainers would appreciate a PR that improves
-# the coverage handling when there are doctests and a `src` layout like ours.
+# We are sure that the coverage maintainers would appreciate a PR
+# that improves the coverage handling when there are doctests
+# and a `src` layout like ours.
+
+docs/cli/index.md: src/openscm_zenodo/cli/__init__.py  ## auto-generate the typer app docs
+	pdm run typer openscm_zenodo.cli utils docs --output docs/cli/index.md --name openscm-zenodo
 
 .PHONY: docs
 docs: docs/cli/index.md  ## build the docs
@@ -63,22 +69,20 @@ docs-strict: docs/cli/index.md  ## build the docs strictly (e.g. raise an error 
 docs-serve: docs/cli/index.md  ## serve the docs locally
 	pdm run mkdocs serve
 
-docs/cli/index.md: src/openscm_zenodo/cli/__init__.py  ## auto-generate the typer app docs
-	pdm run typer openscm_zenodo.cli utils docs --output docs/cli/index.md --name openscm-zenodo
-
 .PHONY: changelog-draft
 changelog-draft:  ## compile a draft of the next changelog
-	pdm run towncrier build --draft
+	pdm run towncrier build --draft --version draft
 
 .PHONY: licence-check
 licence-check:  ## Check that licences of the dependencies are suitable
 	# Will likely fail on Windows, but Makefiles are in general not Windows
 	# compatible so we're not too worried
-	pdm export -o $(TEMP_FILE) --without=tests --without=docs --without=dev
+	pdm export --without=tests --without=docs --without=dev > $(TEMP_FILE)
 	pdm run liccheck -r $(TEMP_FILE) -R licence-check.txt
-	rm $(TEMP_FILE)
+	rm -f $(TEMP_FILE)
 
 .PHONY: virtual-environment
 virtual-environment:  ## update virtual environment, create a new one if it doesn't already exist
-	pdm install -G :all
+	pdm lock --dev --group :all --strategy inherit_metadata
+	pdm install --dev --group :all
 	pdm run pre-commit install

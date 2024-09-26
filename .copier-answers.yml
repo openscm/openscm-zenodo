@@ -1,0 +1,15 @@
+# Changes here will be overwritten by Copier; NEVER EDIT MANUALLY
+_commit: v0.4.0
+_src_path: gl:znicholls/copier-core-python-repository
+email: zebedee.nicholls@climate-energy-college.org
+include_cli: true
+name: Zebedee Nicholls
+notebook_based_docs: true
+pandas_doctests: false
+plot_dependencies: false
+project_description_short: Command-line tool for uploading to zenodo.
+project_name_human: OpenSCM Zenodo
+project_name_pip: openscm-zenodo
+project_name_python: openscm_zenodo
+project_url: https://github.com/openscm/OpenSCM-zenodo
+track_lock_file: true

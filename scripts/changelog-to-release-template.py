@@ -33,14 +33,14 @@ def main() -> None:
             continue
 
         if not grab_notes:
-            if line.startswith("## OpenSCM-Zenodo"):
+            if line.startswith("## OpenSCM Zenodo"):
                 grab_notes = True
 
             continue
 
         # We are grabbing notes now
         # If we've reached the next version's notes, break
-        if line.startswith("## OpenSCM-Zenodo"):
+        if line.startswith("## OpenSCM Zenodo"):
             break
 
         latest_version_notes.append(line)

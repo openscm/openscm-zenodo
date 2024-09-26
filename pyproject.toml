@@ -1,12 +1,82 @@
-[tool.pdm]
-package-dir = "src"
+[project]
+name = "openscm-zenodo"
+version = "0.3.1a1"
+description = "Command-line tool for uploading to zenodo."
+authors = [
+    { name = "Zebedee Nicholls", email = "zebedee.nicholls@climate-energy-college.org" },
+    { name = "Jared Lewis", email = "jared.lewis@climate-energy-college.org" },
+]
+license = {text = "3-Clause BSD License"}
+requires-python = ">=3.9"
+dependencies = [
+    "requests",
+    "tqdm",
+    "typer",
+    "loguru",
+    "attrs",
+]
+readme = "README.md"
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: BSD License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+]
+keyords = ["openscm", "zenodo", "command-line"]
 
+[project.optional-dependencies]
+
+[build-system]
+requires = [
+    "pdm-backend",
+    "pdm-build-locked",
+]
+build-backend = "pdm.backend"
+
+[tool.pdm]
 [tool.pdm.build]
 locked = true
 includes = [
     "src/openscm_zenodo",
     "LICENCE",
 ]
+
+[tool.pdm.dev-dependencies]
+dev = [
+    "pre-commit>=3.8.0",
+    "mypy>=1.11",
+    "towncrier>=24.8.0",
+    "liccheck>=0.9.2",
+    # Required for liccheck
+    "setuptools>=74.1.2",
+    "pip>=24.2",
+
+]
+docs = [
+    "attrs>=24.0.0",
+    "mkdocs>=1.6.0",
+    "mkdocs-autorefs>=1.2.0",
+    "mkdocs-gen-files>=0.5.0",
+    "mkdocs-literate-nav>=0.6.1",
+    "mkdocs-material>=9.5.34",
+    "mkdocs-section-index>=0.3.9",
+    "mkdocstrings[python]>=0.25.0",
+    "pymdown-extensions>=10.9",
+    "mkdocs-jupyter>=0.24.8",
+    "jupyterlab>=4.2.0",
+    "jupytext>=1.16.3",
+]
+tests = [
+    "pytest>=8.3.3",
+    "coverage>=7.6.0",
+    "pytest-cov>=5.0.0",
+]
+
+[project.scripts]
+openscm-zenodo = "openscm_zenodo.cli:app"
 
 [tool.coverage.run]
 source = [
@@ -15,7 +85,7 @@ source = [
 branch = true
 
 [tool.coverage.report]
-fail_under = 80
+fail_under = 90
 skip_empty = true
 show_missing = true
 exclude_also = [
@@ -102,13 +172,13 @@ package = "openscm_zenodo"
 package_dir = "src"
 filename = "docs/changelog.md"
 directory = "changelog/"
-title_format = "## OpenSCM-Zenodo {version} ({project_date})"
+title_format = "## OpenSCM Zenodo {version} ({project_date})"
 underlines = [
     "",
     "",
     "",
 ]
-issue_format = "[#{issue}](https://github.com/climate-resource/input4mips_validation/pulls/{issue})"
+issue_format = "[#{issue}](https://github.com/openscm/OpenSCM-zenodo/pull/{issue})"
 type = [
     { directory = "breaking", name = "⚠️ Breaking Changes", showcontent = true },
     { directory = "deprecation", name = "🗑️ Deprecations", showcontent = true },
@@ -155,85 +225,3 @@ unauthorized_licenses = [
     "gpl v1",
     "gplv1",
 ]
-
-[project]
-name = "openscm-zenodo"
-version = "0.3.1a1"
-description = "Command-line tool for uploading to zenodo"
-keywords = [
-    "zenodo",
-    "command-line",
-]
-readme = "README.md"
-authors = [
-    { name = "Zebedee Nicholls", email = "zebedee.nicholls@climate-energy-college.org" },
-    { name = "Jared Lewis", email = "jared.lewis@climate-energy-college.org" },
-]
-classifiers = [
-    "Development Status :: 4 - Beta",
-    "Intended Audience :: Developers",
-    "License :: OSI Approved :: BSD License",
-    "Operating System :: OS Independent",
-    "Programming Language :: Python :: 3.9",
-    "Programming Language :: Python :: 3.10",
-    "Programming Language :: Python :: 3.11",
-]
-dependencies = [
-    "requests",
-    "tqdm",
-    "typer",
-    "loguru",
-    "attrs",
-]
-requires-python = ">=3.9"
-
-[project.license]
-text = "3-Clause BSD License"
-
-[project.urls]
-Homepage = "https://github.com/openscm/openscm-zenodo"
-"Bug Reports" = "https://github.com/openscm/openscm-zenodo/issues"
-Documentation = "https://openscm-zenodo.readthedocs.io/"
-Source = "https://github.com/openscm/openscm-zenodo"
-
-[project.optional-dependencies]
-dev = [
-    "mypy>=1.11.1",
-    "pre-commit>=3.8.0",
-    "types-tqdm>=4.66.0.20240417",
-    "types-requests>=2.32.0.20240712",
-    "towncrier>=23.11.0,<24",
-    "liccheck>=0.9.2",
-    "pip>=24.2",
-    "websocket-client>=1.8.0",
-]
-docs = [
-    "mkdocs>=1.6.0",
-    "mkdocs-material>=9.5.32",
-    "mkdocstrings[python]>=0.25.2",
-    "mkdocs-gen-files>=0.5.0",
-    "mkdocs-literate-nav>=0.6.1",
-    "mkdocs-section-index>=0.3.9",
-    "mkdocs-autorefs>=1.0.1",
-    "mkdocs-jupyter>=0.24.8",
-    "jupyterlab>=4.2.4",
-    "jupytext>=1.16.4",
-]
-notebooks = [
-    "jupyterlab>=4.2.4",
-]
-tests = [
-    "pytest>=8.3.2",
-    "coverage>=7.6.1",
-    "pytest-cov>=5.0.0",
-]
-
-[project.scripts]
-openscm-zenodo = "openscm_zenodo.cli:app"
-
-[build-system]
-requires = [
-    "pdm-backend",
-    "pdm-build-locked",
-]
-build-backend = "pdm.backend"

@@ -3,14 +3,13 @@ ci:
   autofix_prs: false
   autoupdate_schedule: quarterly
   autoupdate_branch: pre-commit-autoupdate
-  # Skip steps that won't run on pre-commit CI for various reasons,
-  # mostly because they rely on local things.
-  skip: [ ]
+  # Currently network access isn't supported in the pre-commit CI product.
+  skip: [pdm-lock-check, pdm-export, pdm-sync]
 
 # See https://pre-commit.com/hooks.html for more hooks
 repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
-    rev: 'v4.5.0'
+    rev: "v4.5.0"
     hooks:
       - id: check-added-large-files
       - id: check-ast
@@ -34,7 +33,7 @@ repos:
         language: fail
         files: "\\.rej$"
   - repo: https://github.com/charliermarsh/ruff-pre-commit
-    rev: 'v0.1.8'
+    rev: "v0.1.8"
     hooks:
       - id: ruff
         args: [ --fix, --exit-non-zero-on-fix ]
@@ -43,10 +42,15 @@ repos:
     rev: 2.17.0
     hooks:
       # Check that the lock file is up to date.
+      # We need the pdm lock file too
+      # so that we can build locked version of the package.
       - id: pdm-lock-check
-        args: [ --dev, --group, ":all" ]
-      # Put a requirements.txt file in the repo too
+        args: ["--dev", "-G", ":all", "--strategy", "inherit_metadata" ]
+      # Put requirements.txt files in the repo too
       - id: pdm-export
-        args: ['--prod', '-o', 'requirements.txt', '--without-hashes']
+        name: export-requirements
+        args: ["-o", "requirements-locked.txt", "--without-hashes", "--prod"]
+      - id: pdm-export
+        name: export-requirements-docs
+        args: ["-o", "requirements-docs-locked.txt", "--without-hashes", "-G", ":all", "-G", "docs"]
       - id: pdm-sync
-        args: [ -G, ":all" ]

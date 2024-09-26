@@ -1,7 +1,8 @@
 """
 Generate virtual doc files for the mkdocs site.
 
-This script can also be run directly to actually write out those files, as a preview.
+This script can also be run directly to actually write out those files,
+as a preview.
 
 All credit to the creators of:
 https://oprypin.github.io/mkdocs-gen-files/
@@ -21,7 +22,7 @@ from attrs import define
 
 ROOT_DIR = Path("api")
 PACKAGE_NAME_ROOT = "openscm_zenodo"
-TITLE_RENAMINGS = {"cli": "CLI", "openscm_zenodo": "openscm_zenodo"}
+nav = mkdocs_gen_files.Nav()
 
 
 @define
@@ -48,16 +49,13 @@ def write_subpackage_pages(package: object) -> tuple[PackageInfo, ...]:
     return tuple(sub_packages)
 
 
-def get_write_file(package_full_name: str, title: str) -> Path:
+def get_write_file(package_full_name: str) -> Path:
     """Get directory in which to write the doc file"""
     write_dir = ROOT_DIR
     for sub_dir in package_full_name.split(".")[:-1]:
-        if sub_dir in TITLE_RENAMINGS:
-            write_dir = write_dir / TITLE_RENAMINGS[sub_dir]
-        else:
-            write_dir = write_dir / sub_dir
+        write_dir = write_dir / sub_dir
 
-    write_file = write_dir / title / "index.md"
+    write_file = write_dir / package_full_name.split(".")[-1] / "index.md"
 
     return write_file
 
@@ -108,15 +106,15 @@ def write_module_page(
         sub_packages = None
 
     package_name = package_full_name.split(".")[-1]
-    try:
-        title = TITLE_RENAMINGS[package_name]
-    except KeyError:
-        title = package_name.title()
 
-    write_file = get_write_file(package_full_name, title)
+    write_file = get_write_file(package_full_name)
+
+    nav[package_full_name.split(".")] = write_file.relative_to(
+        ROOT_DIR / PACKAGE_NAME_ROOT
+    ).as_posix()
 
     with mkdocs_gen_files.open(write_file, "w") as fh:
-        fh.write(f"# {title}\n")
+        fh.write(f"# {package_full_name}\n")
 
         if sub_packages:
             fh.write("\n")
@@ -135,3 +133,5 @@ def write_module_page(
 
 
 write_module_page(PACKAGE_NAME_ROOT)
+with mkdocs_gen_files.open(ROOT_DIR / PACKAGE_NAME_ROOT / "NAVIGATION.md", "w") as fh:
+    fh.writelines(nav.build_literate_nav())

@@ -2,20 +2,20 @@
 # Please do not edit it manually.
 
 attrs==24.2.0
-certifi==2024.7.4
+certifi==2024.8.30
 charset-normalizer==3.3.2
 click==8.1.7
 colorama==0.4.6
-idna==3.7
+idna==3.10
 loguru==0.7.2
 markdown-it-py==3.0.0
 mdurl==0.1.2
 pygments==2.18.0
 requests==2.32.3
-rich==13.7.1
+rich==13.8.1
 shellingham==1.5.4
 tqdm==4.66.5
-typer==0.12.4
+typer==0.12.5
 typing-extensions==4.12.2
-urllib3==2.2.2
+urllib3==2.2.3
 win32-setctime==1.1.0; sys_platform == "win32"
