@@ -130,7 +130,7 @@ To get started, you will need to make sure that pdm is installed
 although we found that installing with [pipx](https://pipx.pypa.io/stable/installation/)
 worked perfectly for us).
 
-For all of work, we use our `Makefile`.
+For all of our work, we use our `Makefile`.
 You can read the instructions out and run the commands by hand if you wish,
 but we generally discourage this because it can be error prone.
 In order to create your environment, run `make virtual-environment`.
