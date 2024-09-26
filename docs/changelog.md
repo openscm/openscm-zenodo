@@ -21,6 +21,18 @@ from the examples given in that link.
 
 <!-- towncrier release notes start -->
 
+## OpenSCM Zenodo v0.3.1 (2024-09-26)
+
+### 🆕 Features
+
+- Added the `--user-controlled-only` flag to `openscm-zenodo retrieve-metadata`.
+  This is the flag to use if you want to use the retrieved metadata as the starting point for the next version of a deposit. ([#13](https://github.com/openscm/OpenSCM-zenodo/pull/13))
+
+### 🔧 Trivial/Internal Changes
+
+- [#14](https://github.com/openscm/OpenSCM-zenodo/pull/14)
+
+
 ## OpenSCM Zenodo v0.3.0 (2024-08-25)
 
 
