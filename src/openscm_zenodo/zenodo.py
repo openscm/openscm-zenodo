@@ -256,7 +256,13 @@ class ZenodoInteractor:
         metadata = {"metadata": deposition.json()["metadata"]}
 
         if user_controlled_only:
-            for k in ["doi", "imprint_publisher", "prereserve_doi", "publication_date"]:
+            for k in [
+                "doi",
+                "imprint_publisher",
+                "prereserve_doi",
+                "publication_date",
+                "relations",
+            ]:
                 if k in metadata["metadata"]:
                     metadata["metadata"].pop(k)
 
