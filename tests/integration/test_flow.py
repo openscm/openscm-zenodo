@@ -4,8 +4,11 @@ Test our Zenodo interaction flows
 
 from __future__ import annotations
 
+import copy
+import datetime as dt
 import json
 import os
+from pathlib import Path
 
 import pytest
 import requests
@@ -14,14 +17,14 @@ from openscm_zenodo.zenodo import ZenodoDomain, ZenodoInteractor, get_reserved_d
 
 
 @pytest.mark.zenodo_token
-def test_default_end_to_end_flow(test_data_dir):
+def test_default_end_to_end_flow(test_data_dir, tmpdir):
     """
     Test we can start with an ID and end up publishing a new version
     """
+    tmpdir = Path(tmpdir)
+
     any_deposition_id = "101709"
-    metadata_file = test_data_dir / "test-deposit-metadata.json"
     sub_dir_file = test_data_dir / "sub-dir" / "file-in-sub-dir.txt"
-    files_to_upload = [metadata_file, sub_dir_file]
 
     zenoodo_interactor = ZenodoInteractor(
         token=os.environ["ZENODO_TOKEN"],
@@ -48,12 +51,26 @@ def test_default_end_to_end_flow(test_data_dir):
         for response in remove_all_files_responses
     )
 
-    with open(metadata_file) as fh:
-        metadata = json.load(fh)
+    # Retrieve metadata from existing version
+    metadata_current = zenoodo_interactor.get_metadata(
+        latest_deposition_id, user_controlled_only=True
+    )
+
+    # Update this metadata for this version
+    timestamp = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    metadata_updated = copy.deepcopy(metadata_current)
+    metadata_updated["metadata"][
+        "title"
+    ] = f"OpenSCM-Zenodo testing test run {timestamp}"
+
+    # Save the metadata to a file
+    metadata_file = tmpdir / "test-deposit-metadata.json"
+    with open(metadata_file, "w") as fh:
+        json.dump(metadata_current, fh)
 
     update_metadata_response = zenoodo_interactor.update_metadata(
         deposition_id=new_deposition_id,
-        metadata=metadata,
+        metadata=metadata_updated,
     )
     assert isinstance(update_metadata_response, requests.models.Response)
 
@@ -61,8 +78,10 @@ def test_default_end_to_end_flow(test_data_dir):
     reserved_doi = get_reserved_doi(update_metadata_response)
     assert "10.5281/zenodo" in reserved_doi
 
+    # Upload files
     bucket_url = zenoodo_interactor.get_bucket_url(deposition_id=new_deposition_id)
 
+    files_to_upload = [metadata_file, sub_dir_file]
     for file in files_to_upload:
         resp = zenoodo_interactor.upload_file_to_bucket_url(
             file,
@@ -79,12 +98,14 @@ def test_default_end_to_end_flow(test_data_dir):
     zenodo_altered_keys = ["prereserve_doi"]
 
     comparable_metadata_from_user = {
-        k: v for k, v in metadata["metadata"].items() if k not in zenodo_altered_keys
+        k: v
+        for k, v in metadata_updated["metadata"].items()
+        if k not in zenodo_altered_keys
     }
     comparable_metadata_from_publish_response = {
         k: v
         for k, v in publish_response_json["metadata"].items()
-        if k in metadata["metadata"] and k not in zenodo_altered_keys
+        if k in metadata_updated["metadata"] and k not in zenodo_altered_keys
     }
     assert comparable_metadata_from_user == comparable_metadata_from_publish_response
 

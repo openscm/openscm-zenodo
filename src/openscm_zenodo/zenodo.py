@@ -218,6 +218,7 @@ class ZenodoInteractor:
     def get_metadata(
         self,
         deposition_id: str,
+        user_controlled_only: bool = False,
     ) -> MetadataType:
         """
         Get the metadata for a given deposition ID
@@ -226,6 +227,16 @@ class ZenodoInteractor:
         ----------
         deposition_id
             The ID of the deposition
+
+        user_controlled_only
+            Only return metadata keys that the user can control.
+
+            If this is `True`, the metadata keys controlled by Zenodo
+            (e.g. the DOI)
+            are removed from the returned metadata.
+            This flag is important to use
+            if you want to use the retrieved metatdata
+            as the starting point for the next version of a deposit.
 
         Returns
         -------
@@ -243,6 +254,11 @@ class ZenodoInteractor:
             deposition = self.get_record(deposition_id)
 
         metadata = {"metadata": deposition.json()["metadata"]}
+
+        if user_controlled_only:
+            for k in ["doi", "imprint_publisher", "prereserve_doi", "publication_date"]:
+                if k in metadata["metadata"]:
+                    metadata["metadata"].pop(k)
 
         return metadata
 

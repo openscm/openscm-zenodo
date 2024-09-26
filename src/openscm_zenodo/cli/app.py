@@ -150,6 +150,18 @@ If supplied, this overrides any value provided with `--log-level`."""
 def retrieve_metadata_command(
     deposition_id: DEPOSITION_ID_TYPE,
     token: TOKEN_TYPE = None,
+    user_controlled_only: Annotated[
+        bool,
+        typer.Option(
+            help="""Only return metadata keys that the user can control.
+
+If this is `True`, the metadata keys controlled by Zenodo (e.g. the DOI)
+are removed from the returned metadata.
+This flag is important to use
+if you want to use the retrieved metatdata
+as the starting point for the next version of a deposit."""
+        ),
+    ] = False,
     zenodo_domain: ZENODO_DOMAIN_TYPE = ZenodoDomain.production,
 ) -> None:
     """
@@ -160,7 +172,9 @@ def retrieve_metadata_command(
         zenodo_domain=zenodo_domain,
     )
 
-    metadata = zenoodo_interactor.get_metadata(deposition_id)
+    metadata = zenoodo_interactor.get_metadata(
+        deposition_id, user_controlled_only=user_controlled_only
+    )
 
     print(json.dumps(metadata, indent=2, sort_keys=True))
 
