@@ -11,6 +11,10 @@ defaults:
 jobs:
   deploy-pypi:
     name: Deploy to PyPI
+    # Having an environment for deployment is strongly recommend by PyPI
+    # https://docs.pypi.org/trusted-publishers/adding-a-publisher/#github-actions
+    # You can comment this line out if you don't want it.
+    environment: deploy
     runs-on: ubuntu-latest
     permissions:
       # this permission is mandatory for trusted publishing with PyPI

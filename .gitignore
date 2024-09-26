@@ -1,10 +1,28 @@
+# Notebooks
+*.ipynb
+
+# Auto-generated docs and helper files
+docs/api/*
+!docs/api/.gitkeep
+docs/cli/*
+!docs/cli/.gitkeep
+
 # pdm stuff
 .pdm-python
 
-# CI stuff
-pdm-install-flags.txt
+# Databases
+*.db
 
-# licence check
+# Jupyter cache
+.jupyter_cache
+
+# IDE stuff
+.idea/
+
+# Ruff cache
+.ruff_cache
+
+# Licence check
 licence-check.txt
 
 # Byte-compiled / optimized / DLL files
@@ -136,3 +154,6 @@ dmypy.json
 
 # Pyre type checker
 .pyre/
+
+# Mac stuff
+*.DS_Store
