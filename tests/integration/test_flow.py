@@ -27,26 +27,26 @@ def test_default_end_to_end_flow(pre_existing_draft, test_data_dir, tmpdir):
     any_deposition_id = "101709"
     sub_dir_file = test_data_dir / "sub-dir" / "file-in-sub-dir.txt"
 
-    zenoodo_interactor = ZenodoInteractor(
+    zenodo_interactor = ZenodoInteractor(
         token=os.environ["ZENODO_TOKEN"],
         zenodo_domain=ZenodoDomain.sandbox.value,
     )
 
-    latest_deposition_id = zenoodo_interactor.get_latest_deposition_id(
+    latest_deposition_id = zenodo_interactor.get_latest_deposition_id(
         any_deposition_id=any_deposition_id,
     )
     if pre_existing_draft:
         # Make sure that there is a pre-existing draft before continuing
-        zenoodo_interactor.create_new_version_from_latest(
+        zenodo_interactor.create_new_version_from_latest(
             latest_deposition_id=latest_deposition_id
         )
 
-    draft_deposition_id = zenoodo_interactor.get_draft_deposition_id(
+    draft_deposition_id = zenodo_interactor.get_draft_deposition_id(
         latest_deposition_id=latest_deposition_id
     )
 
     # Optional, you might want the previous version's files in some cases
-    remove_all_files_responses = zenoodo_interactor.remove_all_files(
+    remove_all_files_responses = zenodo_interactor.remove_all_files(
         deposition_id=draft_deposition_id
     )
     assert all(
@@ -55,7 +55,7 @@ def test_default_end_to_end_flow(pre_existing_draft, test_data_dir, tmpdir):
     )
 
     # Retrieve metadata from existing version
-    metadata_current = zenoodo_interactor.get_metadata(
+    metadata_current = zenodo_interactor.get_metadata(
         latest_deposition_id, user_controlled_only=True
     )
 
@@ -71,7 +71,7 @@ def test_default_end_to_end_flow(pre_existing_draft, test_data_dir, tmpdir):
     with open(metadata_file, "w") as fh:
         json.dump(metadata_current, fh)
 
-    update_metadata_response = zenoodo_interactor.update_metadata(
+    update_metadata_response = zenodo_interactor.update_metadata(
         deposition_id=draft_deposition_id,
         metadata=metadata_updated,
     )
@@ -82,17 +82,17 @@ def test_default_end_to_end_flow(pre_existing_draft, test_data_dir, tmpdir):
     assert "10.5281/zenodo" in reserved_doi
 
     # Upload files
-    bucket_url = zenoodo_interactor.get_bucket_url(deposition_id=draft_deposition_id)
+    bucket_url = zenodo_interactor.get_bucket_url(deposition_id=draft_deposition_id)
 
     files_to_upload = [metadata_file, sub_dir_file]
     for file in files_to_upload:
-        resp = zenoodo_interactor.upload_file_to_bucket_url(
+        resp = zenodo_interactor.upload_file_to_bucket_url(
             file,
             bucket_url=bucket_url,
         )
         assert isinstance(resp, requests.models.Response)
 
-    publish_response = zenoodo_interactor.publish(deposition_id=draft_deposition_id)
+    publish_response = zenodo_interactor.publish(deposition_id=draft_deposition_id)
     assert isinstance(publish_response, requests.models.Response)
 
     publish_response_json = publish_response.json()

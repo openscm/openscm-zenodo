@@ -44,12 +44,12 @@ def test_default_end_to_end_flow_cli(test_data_dir):
     )
     assert res.exit_code == 0, res.stderr
 
-    zenoodo_interactor = ZenodoInteractor(
+    zenodo_interactor = ZenodoInteractor(
         token=os.environ["ZENODO_TOKEN"],
         zenodo_domain=ZenodoDomain.sandbox.value,
     )
 
-    latest_deposition_id = zenoodo_interactor.get_latest_deposition_id(
+    latest_deposition_id = zenodo_interactor.get_latest_deposition_id(
         any_deposition_id=any_deposition_id,
     )
     # Check that only the newly created deposition ID went to stdout.
@@ -58,7 +58,7 @@ def test_default_end_to_end_flow_cli(test_data_dir):
     assert res.stdout == f"{latest_deposition_id}\n"
     assert latest_deposition_id != any_deposition_id
 
-    publish_response_json = zenoodo_interactor.get_deposition(
+    publish_response_json = zenodo_interactor.get_deposition(
         deposition_id=latest_deposition_id
     ).json()
 
@@ -192,7 +192,7 @@ def test_update_metadata(tmp_path):
     Test we can update metadata on Zenodo
     """
     deposition_id = "101845"
-    zenoodo_interactor = ZenodoInteractor(
+    zenodo_interactor = ZenodoInteractor(
         token=os.environ["ZENODO_TOKEN"],
         zenodo_domain=ZenodoDomain.sandbox.value,
     )
@@ -200,7 +200,7 @@ def test_update_metadata(tmp_path):
     metadata_file_start = tmp_path / "test-update-metadata-original.json"
 
     # Firstly, retrieve the metadata so we can put it back after we're done
-    metadata_start = zenoodo_interactor.get_metadata(deposition_id)
+    metadata_start = zenodo_interactor.get_metadata(deposition_id)
     with open(metadata_file_start, "w") as fh:
         json.dump(metadata_start, fh)
 
@@ -227,9 +227,7 @@ def test_update_metadata(tmp_path):
     assert res.exit_code == 0, res.stderr
     assert not res.stdout
 
-    metadata_res = retrieve_metadata(
-        deposition_id, zenoodo_interactor=zenoodo_interactor
-    )
+    metadata_res = retrieve_metadata(deposition_id, zenodo_interactor=zenodo_interactor)
     assert metadata_res == metadata_new
 
     # Put the metadata back
@@ -247,7 +245,7 @@ def test_update_metadata(tmp_path):
     assert res.exit_code == 0, res.stderr
     assert not res.stdout
 
-    metadata_res = zenoodo_interactor.get_metadata(deposition_id)
+    metadata_res = zenodo_interactor.get_metadata(deposition_id)
     assert metadata_res == metadata_start
 
 
@@ -262,7 +260,7 @@ def test_delete_upload_files(test_data_dir):
     another_sub_dir_file = test_data_dir / "sub-dir" / "another-file.txt"
     files_to_upload = [metadata_file, sub_dir_file, another_sub_dir_file]
 
-    zenoodo_interactor = ZenodoInteractor(
+    zenodo_interactor = ZenodoInteractor(
         token=os.environ["ZENODO_TOKEN"],
         zenodo_domain=ZenodoDomain.sandbox.value,
     )
@@ -281,7 +279,7 @@ def test_delete_upload_files(test_data_dir):
     assert res.exit_code == 0, res.stderr
     assert not res.stdout
 
-    publish_response_json_after_first_removal = zenoodo_interactor.get_deposition(
+    publish_response_json_after_first_removal = zenodo_interactor.get_deposition(
         deposition_id=deposition_id
     ).json()
     assert (
@@ -303,7 +301,7 @@ def test_delete_upload_files(test_data_dir):
     assert res.exit_code == 0, res.stderr
     assert not res.stdout
 
-    publish_response_json_after_removal = zenoodo_interactor.get_deposition(
+    publish_response_json_after_removal = zenodo_interactor.get_deposition(
         deposition_id=deposition_id
     ).json()
     assert len(publish_response_json_after_removal["files"]) == 0
@@ -322,7 +320,7 @@ def test_delete_upload_files(test_data_dir):
     assert res.exit_code == 0, res.stderr
     assert not res.stdout
 
-    publish_response_json_after_upload = zenoodo_interactor.get_deposition(
+    publish_response_json_after_upload = zenodo_interactor.get_deposition(
         deposition_id=deposition_id
     ).json()
     assert len(publish_response_json_after_upload["files"]) == len(files_to_upload)

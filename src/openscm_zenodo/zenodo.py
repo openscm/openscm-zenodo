@@ -880,7 +880,7 @@ class ZenodoInteractor:
 
 def retrieve_metadata(
     deposition_id: str,
-    zenoodo_interactor: Optional[ZenodoInteractor] = None,
+    zenodo_interactor: Optional[ZenodoInteractor] = None,
 ) -> dict[str, dict[str, str]]:
     r"""
     Retrieve metadata associated with a given deposition ID
@@ -890,7 +890,7 @@ def retrieve_metadata(
     deposition_id
         The ID of the deposition
 
-    zenoodo_interactor
+    zenodo_interactor
         Object to use to interact with Zenodo.
 
         If not supplied, we use a default interactor with no authentication.
@@ -959,15 +959,15 @@ def retrieve_metadata(
       }
     }
     """  # noqa: E501
-    if zenoodo_interactor is None:
-        zenoodo_interactor = ZenodoInteractor()
+    if zenodo_interactor is None:
+        zenodo_interactor = ZenodoInteractor()
 
-    return zenoodo_interactor.get_metadata(deposition_id)
+    return zenodo_interactor.get_metadata(deposition_id)
 
 
 def retrieve_bibtex_entry(
     deposition_id: str,
-    zenoodo_interactor: Optional[ZenodoInteractor] = None,
+    zenodo_interactor: Optional[ZenodoInteractor] = None,
 ) -> str:
     r"""
     Retrieve the bibtext entry associated with a given deposition ID
@@ -977,7 +977,7 @@ def retrieve_bibtex_entry(
     deposition_id
         The ID of the deposition
 
-    zenoodo_interactor
+    zenodo_interactor
         Object to use to interact with Zenodo.
 
         If not supplied, we use a default interactor with no authentication.
@@ -1008,15 +1008,15 @@ def retrieve_bibtex_entry(
       url          = {https://doi.org/10.5281/zenodo.4589756},
     }
     """
-    if zenoodo_interactor is None:
-        zenoodo_interactor = ZenodoInteractor()
+    if zenodo_interactor is None:
+        zenodo_interactor = ZenodoInteractor()
 
-    return zenoodo_interactor.get_bibtex_entry(deposition_id)
+    return zenodo_interactor.get_bibtex_entry(deposition_id)
 
 
 def create_new_version(  # noqa: PLR0913
     any_deposition_id: str,
-    zenoodo_interactor: ZenodoInteractor,
+    zenodo_interactor: ZenodoInteractor,
     metadata: Optional[MetadataType] = None,
     publish: bool = False,
     files_to_upload: Optional[list[Path]] = None,
@@ -1037,7 +1037,7 @@ def create_new_version(  # noqa: PLR0913
         https://sandbox.zenodo.org/records/101709,
         then you can pass in "101709" as `any_deposition_id`.
 
-    zenoodo_interactor
+    zenodo_interactor
         Object to use to interact with Zenodo
 
     metadata
@@ -1066,29 +1066,29 @@ def create_new_version(  # noqa: PLR0913
     :
         Deposition ID of the new version
     """
-    latest_deposition_id = zenoodo_interactor.get_latest_deposition_id(
+    latest_deposition_id = zenodo_interactor.get_latest_deposition_id(
         any_deposition_id=any_deposition_id,
     )
 
-    new_deposition_id = zenoodo_interactor.create_new_version_from_latest(
+    new_deposition_id = zenodo_interactor.create_new_version_from_latest(
         latest_deposition_id=latest_deposition_id
     ).json()["id"]
 
     if metadata is not None:
-        zenoodo_interactor.update_metadata(
+        zenodo_interactor.update_metadata(
             deposition_id=new_deposition_id,
             metadata=metadata,
         )
 
     if files_to_upload is not None:
-        zenoodo_interactor.upload_files(
+        zenodo_interactor.upload_files(
             deposition_id=new_deposition_id,
             to_upload=files_to_upload,
             n_threads=n_threads,
         )
 
     if publish:
-        zenoodo_interactor.publish(new_deposition_id)
+        zenodo_interactor.publish(new_deposition_id)
 
     return str(new_deposition_id)
 

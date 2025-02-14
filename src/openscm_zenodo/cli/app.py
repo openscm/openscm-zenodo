@@ -167,12 +167,12 @@ as the starting point for the next version of a deposit."""
     """
     Retrieve metadata
     """
-    zenoodo_interactor = ZenodoInteractor(
+    zenodo_interactor = ZenodoInteractor(
         token=token,
         zenodo_domain=zenodo_domain,
     )
 
-    metadata = zenoodo_interactor.get_metadata(
+    metadata = zenodo_interactor.get_metadata(
         deposition_id, user_controlled_only=user_controlled_only
     )
 
@@ -188,12 +188,12 @@ def retrieve_bibtex_command(
     """
     Retrieve bibtex entry
     """
-    zenoodo_interactor = ZenodoInteractor(
+    zenodo_interactor = ZenodoInteractor(
         token=token,
         zenodo_domain=zenodo_domain,
     )
 
-    bibtex_entry = zenoodo_interactor.get_bibtex_entry(deposition_id)
+    bibtex_entry = zenodo_interactor.get_bibtex_entry(deposition_id)
 
     print(bibtex_entry)
 
@@ -241,12 +241,12 @@ def update_metadata_command(
 
         metadata["metadata"]["prereserve_doi"] = True
 
-    zenoodo_interactor = ZenodoInteractor(
+    zenodo_interactor = ZenodoInteractor(
         token=token,
         zenodo_domain=zenodo_domain,
     )
 
-    update_metadata_response = zenoodo_interactor.update_metadata(
+    update_metadata_response = zenodo_interactor.update_metadata(
         deposition_id, metadata=metadata
     )
 
@@ -269,12 +269,12 @@ def upload_files_command(
         msg = "You must supply some files to upload"
         raise ValueError(msg)
 
-    zenoodo_interactor = ZenodoInteractor(
+    zenodo_interactor = ZenodoInteractor(
         token=token,
         zenodo_domain=zenodo_domain,
     )
 
-    zenoodo_interactor.upload_files(
+    zenodo_interactor.upload_files(
         deposition_id, to_upload=files_to_upload, n_threads=n_threads
     )
 
@@ -295,13 +295,13 @@ def remove_files_command(
     """
     Remove files from a Zenodo deposition
     """
-    zenoodo_interactor = ZenodoInteractor(
+    zenodo_interactor = ZenodoInteractor(
         token=token,
         zenodo_domain=zenodo_domain,
     )
 
     if all:
-        zenoodo_interactor.remove_all_files(
+        zenodo_interactor.remove_all_files(
             deposition_id,
             # n_threads=n_threads,
         )
@@ -312,7 +312,7 @@ def remove_files_command(
             print(msg)
             raise typer.Exit(1)
 
-        zenoodo_interactor.remove_files(
+        zenodo_interactor.remove_files(
             deposition_id,
             to_remove=files_to_remove,
             # n_threads=n_threads
@@ -360,7 +360,7 @@ def create_new_version_command(  # noqa: PLR0913
     else:
         metadata = None
 
-    zenoodo_interactor = ZenodoInteractor(
+    zenodo_interactor = ZenodoInteractor(
         token=token,
         zenodo_domain=zenodo_domain,
     )
@@ -368,7 +368,7 @@ def create_new_version_command(  # noqa: PLR0913
     new_deposit_id = create_new_version(
         any_deposition_id=any_deposition_id,
         metadata=metadata,
-        zenoodo_interactor=zenoodo_interactor,
+        zenodo_interactor=zenodo_interactor,
         publish=publish,
         files_to_upload=files_to_upload,
         n_threads=n_threads,
