@@ -16,7 +16,7 @@ from typing import Any, Optional, Union
 import requests
 import tqdm
 import tqdm.utils
-from attrs import define
+from attrs import define, field
 from loguru import logger
 from typing_extensions import TypeAlias
 
@@ -76,7 +76,7 @@ class ZenodoInteractor:
     Class for interacting with Zenodo
     """
 
-    token: Optional[str] = None
+    token: Optional[str] = field(default=None, repr=lambda value: "***")
     """Token to use for authenticating interactions with the Zenodo domain"""
 
     zenodo_domain: Union[str, ZenodoDomain] = ZenodoDomain.production
