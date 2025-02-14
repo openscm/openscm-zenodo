@@ -170,14 +170,15 @@ def test_retrieve_bibtex(test_data_dir):
     exp = """@dataset{zebedee_nicholls_2021_4589756,
   author       = {Zebedee Nicholls and
                   Jared Lewis},
-  title        = {{Reduced Complexity Model Intercomparison Project
-                   (RCMIP) protocol}},
+  title        = {Reduced Complexity Model Intercomparison Project
+                   (RCMIP) protocol
+                  },
   month        = mar,
   year         = 2021,
   publisher    = {Zenodo},
   version      = {v5.1.0},
   doi          = {10.5281/zenodo.4589756},
-  url          = {https://doi.org/10.5281/zenodo.4589756}
+  url          = {https://doi.org/10.5281/zenodo.4589756},
 }"""
 
     # The result has trailing whitespace, which we remove here

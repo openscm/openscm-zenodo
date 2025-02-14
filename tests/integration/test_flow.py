@@ -17,7 +17,8 @@ from openscm_zenodo.zenodo import ZenodoDomain, ZenodoInteractor, get_reserved_d
 
 
 @pytest.mark.zenodo_token
-def test_default_end_to_end_flow(test_data_dir, tmpdir):
+@pytest.mark.parametrize("pre_existing_draft", (True, False))
+def test_default_end_to_end_flow(pre_existing_draft, test_data_dir, tmpdir):
     """
     Test we can start with an ID and end up publishing a new version
     """
@@ -34,17 +35,19 @@ def test_default_end_to_end_flow(test_data_dir, tmpdir):
     latest_deposition_id = zenoodo_interactor.get_latest_deposition_id(
         any_deposition_id=any_deposition_id,
     )
+    if pre_existing_draft:
+        # Make sure that there is a pre-existing draft before continuing
+        zenoodo_interactor.create_new_version_from_latest(
+            latest_deposition_id=latest_deposition_id
+        )
 
-    # Sometimes you have to delete drafts manually by hand before this works.
-    # I'm not sure why this happens,
-    # the sandbox seems to somehow end up in a weird state.
-    new_deposition_id = zenoodo_interactor.create_new_version_from_latest(
+    draft_deposition_id = zenoodo_interactor.get_draft_deposition_id(
         latest_deposition_id=latest_deposition_id
-    ).json()["id"]
+    )
 
     # Optional, you might want the previous version's files in some cases
     remove_all_files_responses = zenoodo_interactor.remove_all_files(
-        deposition_id=new_deposition_id
+        deposition_id=draft_deposition_id
     )
     assert all(
         isinstance(response, requests.models.Response)
@@ -69,7 +72,7 @@ def test_default_end_to_end_flow(test_data_dir, tmpdir):
         json.dump(metadata_current, fh)
 
     update_metadata_response = zenoodo_interactor.update_metadata(
-        deposition_id=new_deposition_id,
+        deposition_id=draft_deposition_id,
         metadata=metadata_updated,
     )
     assert isinstance(update_metadata_response, requests.models.Response)
@@ -79,7 +82,7 @@ def test_default_end_to_end_flow(test_data_dir, tmpdir):
     assert "10.5281/zenodo" in reserved_doi
 
     # Upload files
-    bucket_url = zenoodo_interactor.get_bucket_url(deposition_id=new_deposition_id)
+    bucket_url = zenoodo_interactor.get_bucket_url(deposition_id=draft_deposition_id)
 
     files_to_upload = [metadata_file, sub_dir_file]
     for file in files_to_upload:
@@ -89,7 +92,7 @@ def test_default_end_to_end_flow(test_data_dir, tmpdir):
         )
         assert isinstance(resp, requests.models.Response)
 
-    publish_response = zenoodo_interactor.publish(deposition_id=new_deposition_id)
+    publish_response = zenoodo_interactor.publish(deposition_id=draft_deposition_id)
     assert isinstance(publish_response, requests.models.Response)
 
     publish_response_json = publish_response.json()
