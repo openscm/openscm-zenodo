@@ -233,6 +233,28 @@ class ZenodoInteractor:
 
         return bucket_url
 
+    def get_concept_id(self, any_deposition_id: str) -> str:
+        """
+        Get the concept ID for a deposition
+
+        The concept ID is the ID that is associated with all versions of a record.
+
+        Parameters
+        ----------
+        any_deposition_id
+            Any deposition ID in the concept
+
+        Returns
+        -------
+        :
+            Concept ID
+        """
+        concept_id = str(
+            self.get_record(record_id=any_deposition_id).json()["conceptrecid"]
+        )
+
+        return concept_id
+
     def get_deposition(
         self,
         deposition_id: str,
@@ -254,6 +276,50 @@ class ZenodoInteractor:
         response = self.get_response(f"/api/deposit/depositions/{deposition_id}")
 
         return response
+
+    def get_draft_deposition_id(self, latest_deposition_id: str) -> str:
+        """
+        Get the deposition ID for a draft
+
+        If no draft exists, it is created from the latest deposition ID.
+        Otherwise, the existing draft is returned.
+
+        Parameters
+        ----------
+        latest_deposition_id
+            ID of the latest deposition
+
+        Returns
+        -------
+        :
+            ID of the draft deposition
+        """
+        draft_deposition_id: None | str = None
+        try:
+            draft_deposition_id = self.create_new_version_from_latest(
+                latest_deposition_id=latest_deposition_id
+            ).json()["id"]
+
+        except AssertionError:
+            concept_id_record = self.get_record(record_id=latest_deposition_id).json()[
+                "conceptrecid"
+            ]
+
+            drafts = self.get_response(
+                post_domain_part="/api/deposit/depositions",
+                rest_action=RestAction.get,
+                params={"status": "draft"},
+            ).json()
+            for draft in drafts:
+                if draft["conceptrecid"] == concept_id_record:
+                    draft_deposition_id = draft["record_id"]
+                    break
+
+        if draft_deposition_id is None:
+            msg = "Should have created a new draft or found an existing draft"
+            raise AssertionError(msg)
+
+        return draft_deposition_id
 
     def get_latest_deposition_id(
         self,
