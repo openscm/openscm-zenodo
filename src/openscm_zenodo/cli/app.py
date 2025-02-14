@@ -113,7 +113,7 @@ def cli(
             "--no-logging",
             help="""Disable all logging.
 
-If supplied, overrides '--logging-config'""",
+If supplied, overrides `--logging-config`""",
         ),
     ] = None,
     logging_level: Annotated[

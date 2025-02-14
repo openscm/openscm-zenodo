@@ -13,7 +13,7 @@ $ openscm-zenodo [OPTIONS] COMMAND [ARGS]...
 * `--version`: Print the version number and exit
 * `--no-logging`: Disable all logging.
 
-If supplied, overrides &#x27;--logging-config&#x27;
+If supplied, overrides `--logging-config`
 * `--logging-level TEXT`: Logging level to use.
 
 This is only applied if no other logging configuration flags are supplied.
