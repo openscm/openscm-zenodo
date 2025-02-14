@@ -12,13 +12,6 @@ Command-line tool for uploading to zenodo.
 [![PyPI](https://img.shields.io/pypi/v/openscm-zenodo.svg)](https://pypi.org/project/openscm-zenodo/)
 [![PyPI install](https://github.com/openscm/OpenSCM-zenodo/actions/workflows/install-pypi.yaml/badge.svg?branch=main)](https://github.com/openscm/OpenSCM-zenodo/actions/workflows/install-pypi.yaml)
 
-<!--- If you release on conda, you can use this
-**Conda :**
-[![Conda](https://img.shields.io/conda/vn/conda-forge/openscm-zenodo.svg)](https://anaconda.org/conda-forge/openscm-zenodo)
-[![Conda platforms](https://img.shields.io/conda/pn/conda-forge/openscm-zenodo.svg)](https://anaconda.org/conda-forge/openscm-zenodo)
-[![Conda install](https://github.com/openscm/OpenSCM-zenodo/actions/workflows/install-conda.yaml/badge.svg?branch=main)](https://github.com/openscm/OpenSCM-zenodo/actions/workflows/install-conda.yaml)
--->
-
 **Tests :**
 [![CI](https://github.com/openscm/OpenSCM-zenodo/actions/workflows/ci.yaml/badge.svg?branch=main)](https://github.com/openscm/OpenSCM-zenodo/actions/workflows/ci.yaml)
 [![Coverage](https://codecov.io/gh/openscm/OpenSCM-zenodo/branch/main/graph/badge.svg)](https://codecov.io/gh/openscm/OpenSCM-zenodo)
@@ -68,21 +61,9 @@ because of breaking updates to dependencies.
 
 The locked version of OpenSCM Zenodo can be installed with
 
-<!--- If you release on conda, you can use this
-=== "mamba"
-    ```sh
-    mamba install -c conda-forge openscm-zenodo-locked
-    ```
-
-=== "conda"
-    ```sh
-    conda install -c conda-forge openscm-zenodo-locked
-    ```
-
--->
 === "pip"
     ```sh
-    pip install openscm-zenodo[locked]
+    pip install 'openscm-zenodo[locked]'
     ```
 
 ### As a library
@@ -104,18 +85,6 @@ please [raise an issue](https://github.com/openscm/OpenSCM-zenodo/issues).
 
 The (non-locked) version of OpenSCM Zenodo can be installed with
 
-<!--- If you release on conda, you can use this
-=== "mamba"
-    ```sh
-    mamba install -c conda-forge openscm-zenodo
-    ```
-
-=== "conda"
-    ```sh
-    conda install -c conda-forge openscm-zenodo
-    ```
-
--->
 === "pip"
     ```sh
     pip install openscm-zenodo
@@ -123,12 +92,12 @@ The (non-locked) version of OpenSCM Zenodo can be installed with
 
 ### For developers
 
-For development, we rely on [pdm](https://pdm-project.org/en/latest/)
+For development, we rely on [uv](https://docs.astral.sh/uv/)
 for all our dependency management.
-To get started, you will need to make sure that pdm is installed
-([instructions here](https://pdm-project.org/en/latest/#installation),
-although we found that installing with [pipx](https://pipx.pypa.io/stable/installation/)
-worked perfectly for us).
+To get started, you will need to make sure that uv is installed
+([instructions here](https://docs.astral.sh/uv/getting-started/installation/)
+(we found that the self-managed install was best,
+particularly for upgrading uv later).
 
 For all of our work, we use our `Makefile`.
 You can read the instructions out and run the commands by hand if you wish,
@@ -146,6 +115,6 @@ For the rest of our developer docs, please see [development][development].
 ## Original template
 
 This project was generated from this template:
-[copier core python repository](https://gitlab.com/znicholls/copier-core-python-repository).
+[copier core python repository](https://gitlab.com/openscm/copier-core-python-repository).
 [copier](https://copier.readthedocs.io/en/stable/) is used to manage and
 distribute this template.

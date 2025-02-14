@@ -75,6 +75,16 @@ The steps required are the following:
 
 1. Enjoy the newly available version
 
+#### Further details
+
+We use [pdm](https://pdm-project.org/en/latest/) for building our project,
+while [uv figures out how it wants to support building](https://github.com/astral-sh/uv/issues/3957).
+This gives us the added benefit that we can use
+[pdm-build-locked](https://pdm-build-locked.readthedocs.io/en/stable/)
+to build locked versions of our package.
+It is for these reasons that we have a pdm pre-commit hook
+and a `pdm.lock` file in our repository.
+
 ## Read the Docs
 
 Our documentation is hosted by [Read the Docs (RtD)](https://www.readthedocs.org/),

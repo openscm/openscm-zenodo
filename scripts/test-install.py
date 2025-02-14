@@ -12,7 +12,7 @@ import pkgutil
 import openscm_zenodo
 
 
-def import_submodules(package_name):
+def import_submodules(package_name: str) -> None:
     """
     Test import of submodules
     """
