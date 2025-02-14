@@ -1,6 +1,6 @@
 [project]
 name = "openscm-zenodo"
-version = "0.3.2a1"
+version = "0.4.0"
 description = "Command-line tool for uploading to zenodo."
 authors = [
     { name = "Zebedee Nicholls", email = "zebedee.nicholls@climate-energy-college.org" },

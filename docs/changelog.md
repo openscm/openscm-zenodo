@@ -21,6 +21,18 @@ from the examples given in that link.
 
 <!-- towncrier release notes start -->
 
+## OpenSCM Zenodo v0.4.0 (2025-02-14)
+
+### 🆕 Features
+
+- Added [`ZenodoInteractor.get_draft_deposition_id`][openscm_zenodo.ZenodoInteractor.get_draft_deposition_id].
+  This makes it possible to get the draft deposition ID, even if you're already created the draft.
+  It is the recommended way of getting a draft deposition ID,
+  superseding [`ZenodoInteractor.create_new_version_from_latest`][openscm_zenodo.ZenodoInteractor.create_new_version_from_latest].
+  ([`ZenodoInteractor.create_new_version_from_latest`][openscm_zenodo.ZenodoInteractor.create_new_version_from_latest]
+  is still available, it just fails if you have already created a draft.) ([#15](https://github.com/openscm/OpenSCM-zenodo/pull/15))
+
+
 ## OpenSCM Zenodo v0.3.1 (2024-09-26)
 
 ### 🆕 Features
