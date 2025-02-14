@@ -1539,10 +1539,10 @@ tests-min = [
 
 [package.metadata]
 requires-dist = [
-    { name = "attrs", specifier = ">=0.20" },
+    { name = "attrs", specifier = ">=22.0" },
     { name = "loguru", specifier = ">=0.5" },
-    { name = "requests", specifier = ">=2.0" },
-    { name = "tqdm", specifier = ">=4.0" },
+    { name = "requests", specifier = ">=2.26" },
+    { name = "tqdm", specifier = ">=4.50" },
     { name = "typer", specifier = ">=0.10" },
 ]
 
