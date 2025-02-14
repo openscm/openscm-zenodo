@@ -21,6 +21,25 @@ from the examples given in that link.
 
 <!-- towncrier release notes start -->
 
+## OpenSCM Zenodo v0.5.0 (2025-02-14)
+
+### ⚠️ Breaking Changes
+
+- Rename the typo "zenoodo" to "zenodo" throughout. ([#17](https://github.com/openscm/OpenSCM-zenodo/pull/17))
+
+### 🎉 Improvements
+
+- Mask the token in the representation of [`ZenodoInteractor`][openscm_zenodo.ZenodoInteractor]. ([#17](https://github.com/openscm/OpenSCM-zenodo/pull/17))
+
+### 📚 Improved Documentation
+
+- Added basic documentation of how to use the library, see ["How to upload to Zenodo"](how-to-upload-to-zenodo). ([#17](https://github.com/openscm/OpenSCM-zenodo/pull/17))
+
+### 🔧 Trivial/Internal Changes
+
+- [#16](https://github.com/openscm/OpenSCM-zenodo/pull/16), [#17](https://github.com/openscm/OpenSCM-zenodo/pull/17)
+
+
 ## OpenSCM Zenodo v0.4.0 (2025-02-14)
 
 ### 🆕 Features
