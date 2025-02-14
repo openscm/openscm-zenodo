@@ -108,6 +108,9 @@ formats = "ipynb,py:percent"
 addopts = [
     "--import-mode=importlib",
 ]
+doctest_optionflags = [
+    "NORMALIZE_WHITESPACE",  # treat whitespace sanely
+]
 
 [tool.ruff]
 src = [
