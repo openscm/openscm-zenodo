@@ -88,6 +88,294 @@ class ZenodoInteractor:
     timeout_upload: int = 60 * 60
     """Timeout to apply to uploads"""
 
+    def create_new_version_from_latest(
+        self,
+        latest_deposition_id: str,
+    ) -> requests.models.Response:
+        """
+        Create a new version of a record from the latest deposition ID
+
+        Parameters
+        ----------
+        latest_deposition_id
+            The ID of the latest deposition.
+
+            This is the ID of the latest version from a collection of records.
+            For example, if there is v1.0.0, v2.0.0 and v3.0.0 on Zenodo,
+            this should be the deposition ID of v3.0.0.
+
+        Returns
+        -------
+        :
+            The new version's record from Zenodo
+
+        Notes
+        -----
+        From https://developers.zenodo.org/#new-version
+
+        ...
+        - The id used to create this new version has to be the id of the latest version.
+          It is not possible to use the global id that references all the versions.
+
+        We replicate this logic here.
+        To create a new version from the all records ID that references all versions,
+        use [`create_new_version`][openscm_zenodo.zenodo.create_new_version].
+        """
+        logger.info(f"Creating a new version from {latest_deposition_id=!r}")
+
+        try:
+            create_new_version_response = self.get_response(
+                post_domain_part=f"/api/deposit/depositions/{latest_deposition_id}/actions/newversion",
+                rest_action=RestAction.post,
+            )
+            logger.info(
+                "Successfully created new version. "
+                "The new version's deposition id is "
+                f"{create_new_version_response.json()['id']!r}"
+            )
+
+        except requests.exceptions.HTTPError as exc:
+            exc_response_json = exc.response.json()
+            if (
+                exc_response_json["errors"][0]["messages"][0]
+                == "Please remove all files first."
+            ):
+                # TODO: consider just not raising an error in this case
+                msg = (
+                    "You must remove all the files in the current draft version "
+                    "before you can call the 'create a new version' "
+                    "API again without error. "
+                    "Having said that, this error means that you already have a draft, "
+                    "hence you probably don't need to call the "
+                    "'create a new version' API in the first place."
+                )
+
+                raise AssertionError(msg) from exc
+
+            raise
+
+        # I am pretty sure the below text from https://developers.zenodo.org/#new-version
+        # is wrong because the above appears to return the new version's record.
+        #
+        # Text I think is wrong from https://developers.zenodo.org/#new-version:
+        #
+        # - The response body of this action
+        #   is NOT the new version deposit, but the original resource.
+        #   The new version deposition can be accessed through the "latest_draft"
+        #   under "links" in the response body.
+
+        return create_new_version_response
+
+    def delete_deposition(self, deposition_id: str) -> None:
+        """
+        Delete a deposition
+
+        Note that this only works on draft depositions.
+
+        Parameters
+        ----------
+        deposition_id
+            Deposition ID to delete
+        """
+        logger.info(f"Deleting {deposition_id=!r}")
+        self.get_response(
+            f"/api/deposit/depositions/{deposition_id}",
+            rest_action=RestAction.delete,
+        )
+        logger.info(f"Successfully deleted {deposition_id=!r}")
+
+    def get_bibtex_entry(
+        self,
+        deposition_id: str,
+    ) -> str:
+        """
+        Get the bibtex entry for a given deposition ID
+
+        Parameters
+        ----------
+        deposition_id
+            The ID of the deposition
+
+        Returns
+        -------
+        :
+            Bibtex entry for `deposition_id`.
+        """
+        logger.info(f"Retrieving bibtex entry for {deposition_id=!r}")
+        response = self.get_response(f"/records/{deposition_id}/export/bibtex")
+
+        bibtex_entry = response.text
+
+        return bibtex_entry
+
+    def get_bucket_url(self, deposition_id: str) -> str:
+        """
+        Get the bucket URL for a given deposition ID
+
+        Parameters
+        ----------
+        deposition_id
+            Deposition ID for which to get the bucket URL
+
+        Returns
+        -------
+        :
+            Bucket URL for `deposition_id`
+        """
+        logger.info(f"Retrieving bucket URL for {deposition_id=!r}")
+
+        deposit_id_response = self.get_response(
+            post_domain_part=f"/api/deposit/depositions/{deposition_id}",
+        )
+
+        bucket_url = str(deposit_id_response.json()["links"]["bucket"])
+        logger.info(f"Successfully retrieved {bucket_url=!r} for {deposition_id=!r}")
+
+        return bucket_url
+
+    def get_deposition(
+        self,
+        deposition_id: str,
+    ) -> requests.models.Response:
+        """
+        Get a deposition from Zenodo
+
+        Parameters
+        ----------
+        deposition_id
+            The ID of the deposition
+
+        Returns
+        -------
+        :
+            The Zenodo deposition
+        """
+        logger.info(f"Retrieving deposition {deposition_id!r}")
+        response = self.get_response(f"/api/deposit/depositions/{deposition_id}")
+
+        return response
+
+    def get_latest_deposition_id(
+        self,
+        any_deposition_id: str,
+    ) -> str:
+        """
+        Get the latest deposition ID from any deposition ID which is part of the record
+
+        For example, we can take the deposition ID
+        from the first version of a record which was published
+        and always be given back the deposition ID of the latest record in the series.
+
+        Parameters
+        ----------
+        any_deposition_id
+            Any deposition ID which belongs to the series/record of interest.
+
+            This can be obtained from the URL of any deposit in the series.
+            For example, if the Zenodo URL is
+            https://sandbox.zenodo.org/records/101709,
+            then you can pass in "101709" as `any_deposition_id`.
+
+        Returns
+        -------
+        :
+            ID of the latest deposition in the series/record
+        """
+        logger.info(
+            "Retrieving the ID of the latest deposition in the series "
+            f"which includes deposition ID {any_deposition_id!r}"
+        )
+        record = self.get_record(record_id=any_deposition_id)
+        record_json = record.json()
+
+        record_latest = requests.get(
+            record_json["links"]["latest"], timeout=self.timeout
+        )
+
+        latest_deposition_id = str(record_latest.json()["id"])
+        logger.info(
+            f"For deposition ID {any_deposition_id!r}, "
+            "the ID of the latest deposition in the series is "
+            f"{latest_deposition_id!r}"
+        )
+
+        return latest_deposition_id
+
+    def get_metadata(
+        self,
+        deposition_id: str,
+        user_controlled_only: bool = False,
+    ) -> MetadataType:
+        """
+        Get the metadata for a given deposition ID
+
+        Parameters
+        ----------
+        deposition_id
+            The ID of the deposition
+
+        user_controlled_only
+            Only return metadata keys that the user can control.
+
+            If this is `True`, the metadata keys controlled by Zenodo
+            (e.g. the DOI)
+            are removed from the returned metadata.
+            This flag is important to use
+            if you want to use the retrieved metadata
+            as the starting point for the next version of a deposit.
+
+        Returns
+        -------
+        :
+            Metadata, in a form which could be used directly with the Zenodo API
+
+            For an example, see the docstring of
+            [`retrieve_metadata`][openscm_zenodo.zenodo.retrieve_metadata].
+        """
+        logger.info(f"Retrieving metadata for {deposition_id=!r}")
+        if self.token:
+            deposition = self.get_deposition(deposition_id)
+
+        else:
+            deposition = self.get_record(deposition_id)
+
+        metadata = {"metadata": deposition.json()["metadata"]}
+
+        if user_controlled_only:
+            for k in [
+                "doi",
+                "imprint_publisher",
+                "prereserve_doi",
+                "publication_date",
+                "relations",
+            ]:
+                if k in metadata["metadata"]:
+                    metadata["metadata"].pop(k)
+
+        return metadata
+
+    def get_record(
+        self,
+        record_id: str,
+    ) -> requests.models.Response:
+        """
+        Get a record from Zenodo
+
+        Parameters
+        ----------
+        record_id
+            The ID of the record
+
+        Returns
+        -------
+        :
+            The Zenodo record
+        """
+        logger.info(f"Retrieving record {record_id!r}")
+        response = self.get_response(f"/api/records/{record_id}")
+
+        return response
+
     def get_response(
         self,
         post_domain_part: str,
@@ -171,314 +459,188 @@ class ZenodoInteractor:
 
         return response
 
-    def get_record(
-        self,
-        record_id: str,
-    ) -> requests.models.Response:
+    def publish(self, deposition_id: str) -> requests.models.Response:
         """
-        Get a record from Zenodo
+        Publish a deposition
+
+        Note that this only works on draft depositions.
 
         Parameters
         ----------
-        record_id
-            The ID of the record
+        deposition_id
+            Deposition ID to publish
 
         Returns
         -------
         :
-            The Zenodo record
+            Response from the publish request
         """
-        logger.info(f"Retrieving record {record_id!r}")
-        response = self.get_response(f"/api/records/{record_id}")
+        logger.info(f"Publishing {deposition_id=!r}")
+        response = self.get_response(
+            f"/api/deposit/depositions/{deposition_id}/actions/publish",
+            rest_action=RestAction.post,
+        )
+        logger.info(f"Successfully published {deposition_id=!r}")
 
         return response
 
-    def get_deposition(
+    def remove_all_files(
         self,
         deposition_id: str,
-    ) -> requests.models.Response:
+        # # Off until parallelism works
+        # n_threads: int = 4
+    ) -> tuple[requests.models.Response, ...]:
         """
-        Get a deposition from Zenodo
+        Remove all the files currently associated with a given deposition
 
         Parameters
         ----------
         deposition_id
-            The ID of the deposition
+            Deposition ID from which to remove all files
 
         Returns
         -------
         :
-            The Zenodo deposition
+            The response(s) from the file removal request(s)
         """
-        logger.info(f"Retrieving deposition {deposition_id!r}")
-        response = self.get_response(f"/api/deposit/depositions/{deposition_id}")
+        logger.info(f"Removing all files from {deposition_id=!r}")
+        files_response = self.get_response(
+            f"/api/deposit/depositions/{deposition_id}/files",
+        )
+
+        file_ids_to_remove = [v["id"] for v in files_response.json()]
+
+        return self.remove_files_by_id(
+            deposition_id=deposition_id,
+            file_ids_to_remove=file_ids_to_remove,
+            # n_threads=n_threads,
+        )
+
+    def remove_file_id(
+        self,
+        deposition_id: str,
+        to_remove_id: str,
+    ) -> requests.models.Response:
+        """
+        Remove a file from a deposition, using its ID
+
+        Parameters
+        ----------
+        deposition_id
+            ID of the deposition to alter
+
+        to_remove_id
+            ID of the file to remove
+
+        Returns
+        -------
+        :
+            The response from the file removal request
+        """
+        response = self.get_response(
+            f"/api/deposit/depositions/{deposition_id}/files/{to_remove_id}",
+            rest_action=RestAction.delete,
+        )
 
         return response
 
-    def get_metadata(
+    def remove_files(
         self,
         deposition_id: str,
-        user_controlled_only: bool = False,
-    ) -> MetadataType:
+        to_remove: Collection[Path],
+        # # Off until parallelism works
+        # n_threads: int = 4,
+    ) -> tuple[requests.models.Response, ...]:
         """
-        Get the metadata for a given deposition ID
+        Remove file(s) from a deposition
 
         Parameters
         ----------
         deposition_id
-            The ID of the deposition
+            ID of the deposition to alter
 
-        user_controlled_only
-            Only return metadata keys that the user can control.
-
-            If this is `True`, the metadata keys controlled by Zenodo
-            (e.g. the DOI)
-            are removed from the returned metadata.
-            This flag is important to use
-            if you want to use the retrieved metadata
-            as the starting point for the next version of a deposit.
+        to_remove
+            File(s) to remove
 
         Returns
         -------
         :
-            Metadata, in a form which could be used directly with the Zenodo API
-
-            For an example, see the docstring of
-            [`retrieve_metadata`][openscm_zenodo.zenodo.retrieve_metadata].
+            The response(s) from the file removal request(s)
         """
-        logger.info(f"Retrieving metadata for {deposition_id=!r}")
-        if self.token:
-            deposition = self.get_deposition(deposition_id)
+        logger.info(
+            f"Removing {len(to_remove)} {'files' if len(to_remove) > 1 else 'file'} "
+            f"from {deposition_id=!r}"
+        )
+        filenames_to_delete = set(f.name for f in to_remove)
 
-        else:
-            deposition = self.get_record(deposition_id)
+        files_response = self.get_response(
+            f"/api/deposit/depositions/{deposition_id}/files",
+        )
+        file_ids_to_remove = [
+            v["id"]
+            for v in files_response.json()
+            if v["filename"] in filenames_to_delete
+        ]
 
-        metadata = {"metadata": deposition.json()["metadata"]}
+        return self.remove_files_by_id(
+            file_ids_to_remove=file_ids_to_remove,
+            deposition_id=deposition_id,
+        )
 
-        if user_controlled_only:
-            for k in [
-                "doi",
-                "imprint_publisher",
-                "prereserve_doi",
-                "publication_date",
-                "relations",
-            ]:
-                if k in metadata["metadata"]:
-                    metadata["metadata"].pop(k)
-
-        return metadata
-
-    def get_bibtex_entry(
+    def remove_files_by_id(
         self,
         deposition_id: str,
-    ) -> str:
+        file_ids_to_remove: Iterable[str],
+        # Off until parallelism works
+        # n_threads: int = 4,
+    ) -> tuple[requests.models.Response, ...]:
         """
-        Get the bibtex entry for a given deposition ID
+        Remove file(s) from a deposition, using their IDs
 
         Parameters
         ----------
         deposition_id
-            The ID of the deposition
+            ID of the deposition to alter
+
+        file_ids_to_remove
+            ID of file(s) to remove
 
         Returns
         -------
         :
-            Bibtex entry for `deposition_id`.
+            The response(s) from the file removal request(s)
         """
-        logger.info(f"Retrieving bibtex entry for {deposition_id=!r}")
-        response = self.get_response(f"/records/{deposition_id}/export/bibtex")
-
-        bibtex_entry = response.text
-
-        return bibtex_entry
-
-    def get_latest_deposition_id(
-        self,
-        any_deposition_id: str,
-    ) -> str:
-        """
-        Get the latest deposition ID from any deposition ID which is part of the record
-
-        For example, we can take the deposition ID
-        from the first version of a record which was published
-        and always be given back the deposition ID of the latest record in the series.
-
-        Parameters
-        ----------
-        any_deposition_id
-            Any deposition ID which belongs to the series/record of interest.
-
-            This can be obtained from the URL of any deposit in the series.
-            For example, if the Zenodo URL is
-            https://sandbox.zenodo.org/records/101709,
-            then you can pass in "101709" as `any_deposition_id`.
-
-        Returns
-        -------
-        :
-            ID of the latest deposition in the series/record
-        """
-        logger.info(
-            "Retrieving the ID of the latest deposition in the series "
-            f"which includes deposition ID {any_deposition_id!r}"
+        # Wanted to do this in parallel, but weirdly flaky
+        responses = tuple(
+            [
+                self.remove_file_id(deposition_id=deposition_id, to_remove_id=file_id)
+                for file_id in tqdm.tqdm(file_ids_to_remove, desc="Files to remove")
+            ]
         )
-        record = self.get_record(record_id=any_deposition_id)
-        record_json = record.json()
-
-        record_latest = requests.get(
-            record_json["links"]["latest"], timeout=self.timeout
-        )
-
-        latest_deposition_id = str(record_latest.json()["id"])
-        logger.info(
-            f"For deposition ID {any_deposition_id!r}, "
-            "the ID of the latest deposition in the series is "
-            f"{latest_deposition_id!r}"
-        )
-
-        return latest_deposition_id
-
-    def create_new_version_from_latest(
-        self,
-        latest_deposition_id: str,
-    ) -> requests.models.Response:
-        """
-        Create a new version of a record from the latest deposition ID
-
-        Parameters
-        ----------
-        latest_deposition_id
-            The ID of the latest deposition.
-
-            This is the ID of the latest version from a collection of records.
-            For example, if there is v1.0.0, v2.0.0 and v3.0.0 on Zenodo,
-            this should be the deposition ID of v3.0.0.
-
-        Returns
-        -------
-        :
-            The new version's record from Zenodo
-
-        Notes
-        -----
-        From https://developers.zenodo.org/#new-version
-
-        ...
-        - The id used to create this new version has to be the id of the latest version.
-          It is not possible to use the global id that references all the versions.
-
-        We replicate this logic here.
-        To create a new version from the all records ID that references all versions,
-        use [`create_new_version`][openscm_zenodo.zenodo.create_new_version].
-        """
-        logger.info(f"Creating a new version from {latest_deposition_id=!r}")
-
-        try:
-            create_new_version_response = self.get_response(
-                post_domain_part=f"/api/deposit/depositions/{latest_deposition_id}/actions/newversion",
-                rest_action=RestAction.post,
-            )
-            logger.info(
-                "Successfully created new version. "
-                "The new version's deposition id is "
-                f"{create_new_version_response.json()['id']!r}"
-            )
-
-        except requests.exceptions.HTTPError as exc:
-            exc_response_json = exc.response.json()
-            if (
-                exc_response_json["errors"][0]["messages"][0]
-                == "Please remove all files first."
-            ):
-                # TODO: consider just not raising an error in this case
-                msg = (
-                    "You must remove all the files in the current draft version "
-                    "before you can call the 'create a new version' "
-                    "API again without error. "
-                    "Having said that, this error means that you already have a draft, "
-                    "hence you probably don't need to call the "
-                    "'create a new version' API in the first place."
-                )
-
-                raise AssertionError(msg) from exc
-
-            raise
-
-        # I am pretty sure the below text from https://developers.zenodo.org/#new-version
-        # is wrong because the above appears to return the new version's record.
+        # with concurrent.futures.ThreadPoolExecutor(max_workers=n_threads) as executor:
+        #     futures = [
+        #         executor.submit(
+        #             self.remove_file_id,
+        #             to_remove_id=file_id,
+        #             deposition_id=deposition_id,
+        #         )
+        #         for file_id in tqdm.tqdm(
+        #             file_ids_to_remove, desc="Submitting files to queue"
+        #         )
+        #     ]
         #
-        # Text I think is wrong from https://developers.zenodo.org/#new-version:
-        #
-        # - The response body of this action
-        #   is NOT the new version deposit, but the original resource.
-        #   The new version deposition can be accessed through the "latest_draft"
-        #   under "links" in the response body.
+        #     responses = tuple(
+        #         [
+        #             future.result()
+        #             for future in tqdm.tqdm(
+        #                 concurrent.futures.as_completed(futures),
+        #                 desc="Files to remove",
+        #                 total=len(futures),
+        #             )
+        #         ]
+        #     )
 
-        return create_new_version_response
-
-    def get_bucket_url(self, deposition_id: str) -> str:
-        """
-        Get the bucket URL for a given deposition ID
-
-        Parameters
-        ----------
-        deposition_id
-            Deposition ID for which to get the bucket URL
-
-        Returns
-        -------
-        :
-            Bucket URL for `deposition_id`
-        """
-        logger.info(f"Retrieving bucket URL for {deposition_id=!r}")
-
-        deposit_id_response = self.get_response(
-            post_domain_part=f"/api/deposit/depositions/{deposition_id}",
-        )
-
-        bucket_url = str(deposit_id_response.json()["links"]["bucket"])
-        logger.info(f"Successfully retrieved {bucket_url=!r} for {deposition_id=!r}")
-
-        return bucket_url
-
-    def update_metadata(
-        self, deposition_id: str, metadata: MetadataType
-    ) -> requests.models.Response:
-        """
-        Update the metadata for a given deposition
-
-        Parameters
-        ----------
-        deposition_id
-            Deposition ID of which to update the metadata
-
-        metadata
-            Metadata to apply to the deposition
-
-            For the complete list of supported key : value pairs supported by Zenodo,
-            see [https://developers.zenodo.org/#representation]().
-            You do not need to provide values for all the metadata keys,
-            only the ones relevant to you.
-
-            For an example, see the docstring of
-            [`retrieve_metadata`][openscm_zenodo.zenodo.retrieve_metadata].
-
-        Returns
-        -------
-        :
-            Response to the metadata update request.
-        """
-        logger.info(f"Updating metadata for {deposition_id=!r}")
-        logger.debug(f"New metadata: {metadata}")
-
-        update_metadata_response = self.get_response(
-            post_domain_part=f"/api/deposit/depositions/{deposition_id}",
-            rest_action=RestAction.put,
-            data=json.dumps(metadata),
-            headers={"Content-Type": "application/json"},
-        )
-
-        return update_metadata_response
+        return responses
 
     def upload_file_to_bucket_url(
         self,
@@ -610,206 +772,44 @@ class ZenodoInteractor:
 
         return responses
 
-    def publish(self, deposition_id: str) -> requests.models.Response:
-        """
-        Publish a deposition
-
-        Note that this only works on draft depositions.
-
-        Parameters
-        ----------
-        deposition_id
-            Deposition ID to publish
-
-        Returns
-        -------
-        :
-            Response from the publish request
-        """
-        logger.info(f"Publishing {deposition_id=!r}")
-        response = self.get_response(
-            f"/api/deposit/depositions/{deposition_id}/actions/publish",
-            rest_action=RestAction.post,
-        )
-        logger.info(f"Successfully published {deposition_id=!r}")
-
-        return response
-
-    def delete_deposition(self, deposition_id: str) -> None:
-        """
-        Delete a deposition
-
-        Note that this only works on draft depositions.
-
-        Parameters
-        ----------
-        deposition_id
-            Deposition ID to delete
-        """
-        logger.info(f"Deleting {deposition_id=!r}")
-        self.get_response(
-            f"/api/deposit/depositions/{deposition_id}",
-            rest_action=RestAction.delete,
-        )
-        logger.info(f"Successfully deleted {deposition_id=!r}")
-
-    def remove_files(
-        self,
-        deposition_id: str,
-        to_remove: Collection[Path],
-        # # Off until parallelism works
-        # n_threads: int = 4,
-    ) -> tuple[requests.models.Response, ...]:
-        """
-        Remove file(s) from a deposition
-
-        Parameters
-        ----------
-        deposition_id
-            ID of the deposition to alter
-
-        to_remove
-            File(s) to remove
-
-        Returns
-        -------
-        :
-            The response(s) from the file removal request(s)
-        """
-        logger.info(
-            f"Removing {len(to_remove)} {'files' if len(to_remove) > 1 else 'file'} "
-            f"from {deposition_id=!r}"
-        )
-        filenames_to_delete = set(f.name for f in to_remove)
-
-        files_response = self.get_response(
-            f"/api/deposit/depositions/{deposition_id}/files",
-        )
-        file_ids_to_remove = [
-            v["id"]
-            for v in files_response.json()
-            if v["filename"] in filenames_to_delete
-        ]
-
-        return self.remove_files_by_id(
-            file_ids_to_remove=file_ids_to_remove,
-            deposition_id=deposition_id,
-        )
-
-    def remove_files_by_id(
-        self,
-        deposition_id: str,
-        file_ids_to_remove: Iterable[str],
-        # Off until parallelism works
-        # n_threads: int = 4,
-    ) -> tuple[requests.models.Response, ...]:
-        """
-        Remove file(s) from a deposition, using their IDs
-
-        Parameters
-        ----------
-        deposition_id
-            ID of the deposition to alter
-
-        file_ids_to_remove
-            ID of file(s) to remove
-
-        Returns
-        -------
-        :
-            The response(s) from the file removal request(s)
-        """
-        # Wanted to do this in parallel, but weirdly flaky
-        responses = tuple(
-            [
-                self.remove_file_id(deposition_id=deposition_id, to_remove_id=file_id)
-                for file_id in tqdm.tqdm(file_ids_to_remove, desc="Files to remove")
-            ]
-        )
-        # with concurrent.futures.ThreadPoolExecutor(max_workers=n_threads) as executor:
-        #     futures = [
-        #         executor.submit(
-        #             self.remove_file_id,
-        #             to_remove_id=file_id,
-        #             deposition_id=deposition_id,
-        #         )
-        #         for file_id in tqdm.tqdm(
-        #             file_ids_to_remove, desc="Submitting files to queue"
-        #         )
-        #     ]
-        #
-        #     responses = tuple(
-        #         [
-        #             future.result()
-        #             for future in tqdm.tqdm(
-        #                 concurrent.futures.as_completed(futures),
-        #                 desc="Files to remove",
-        #                 total=len(futures),
-        #             )
-        #         ]
-        #     )
-
-        return responses
-
-    def remove_file_id(
-        self,
-        deposition_id: str,
-        to_remove_id: str,
+    def update_metadata(
+        self, deposition_id: str, metadata: MetadataType
     ) -> requests.models.Response:
         """
-        Remove a file from a deposition, using its ID
+        Update the metadata for a given deposition
 
         Parameters
         ----------
         deposition_id
-            ID of the deposition to alter
+            Deposition ID of which to update the metadata
 
-        to_remove_id
-            ID of the file to remove
+        metadata
+            Metadata to apply to the deposition
 
-        Returns
-        -------
-        :
-            The response from the file removal request
-        """
-        response = self.get_response(
-            f"/api/deposit/depositions/{deposition_id}/files/{to_remove_id}",
-            rest_action=RestAction.delete,
-        )
+            For the complete list of supported key : value pairs supported by Zenodo,
+            see [https://developers.zenodo.org/#representation]().
+            You do not need to provide values for all the metadata keys,
+            only the ones relevant to you.
 
-        return response
-
-    def remove_all_files(
-        self,
-        deposition_id: str,
-        # # Off until parallelism works
-        # n_threads: int = 4
-    ) -> tuple[requests.models.Response, ...]:
-        """
-        Remove all the files currently associated with a given deposition
-
-        Parameters
-        ----------
-        deposition_id
-            Deposition ID from which to remove all files
+            For an example, see the docstring of
+            [`retrieve_metadata`][openscm_zenodo.zenodo.retrieve_metadata].
 
         Returns
         -------
         :
-            The response(s) from the file removal request(s)
+            Response to the metadata update request.
         """
-        logger.info(f"Removing all files from {deposition_id=!r}")
-        files_response = self.get_response(
-            f"/api/deposit/depositions/{deposition_id}/files",
+        logger.info(f"Updating metadata for {deposition_id=!r}")
+        logger.debug(f"New metadata: {metadata}")
+
+        update_metadata_response = self.get_response(
+            post_domain_part=f"/api/deposit/depositions/{deposition_id}",
+            rest_action=RestAction.put,
+            data=json.dumps(metadata),
+            headers={"Content-Type": "application/json"},
         )
 
-        file_ids_to_remove = [v["id"] for v in files_response.json()]
-
-        return self.remove_files_by_id(
-            deposition_id=deposition_id,
-            file_ids_to_remove=file_ids_to_remove,
-            # n_threads=n_threads,
-        )
+        return update_metadata_response
 
 
 def retrieve_metadata(
