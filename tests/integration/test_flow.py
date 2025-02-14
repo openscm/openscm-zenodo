@@ -62,9 +62,9 @@ def test_default_end_to_end_flow(pre_existing_draft, test_data_dir, tmpdir):
     # Update this metadata for this version
     timestamp = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     metadata_updated = copy.deepcopy(metadata_current)
-    metadata_updated["metadata"][
-        "title"
-    ] = f"OpenSCM-Zenodo testing test run {timestamp}"
+    metadata_updated["metadata"]["title"] = (
+        f"OpenSCM-Zenodo testing test run {timestamp}"
+    )
 
     # Save the metadata to a file
     metadata_file = tmpdir / "test-deposit-metadata.json"

@@ -64,9 +64,11 @@ plugins:
           - remove_input
   # Docstring generation
   - mkdocstrings:
+      # See https://analog-garage.github.io/mkdocstrings-python-xref/1.6.0/
+      default_handler: python_xref
       enable_inventory: true
       handlers:
-        python:
+        python_xref:
           paths: [src]
           import:
             # Cross-ref helpers (lots included here, remove what you don't want)
@@ -76,6 +78,7 @@ plugins:
             - https://loguru.readthedocs.io/en/latest/objects.inv
             - https://matplotlib.org/stable/objects.inv
             - https://ncdata.readthedocs.io/en/stable/objects.inv
+            - https://numpy.org/doc/stable/objects.inv
             - https://openscm-units.readthedocs.io/en/stable/objects.inv
             - https://pandas.pydata.org/docs/objects.inv
             - https://pint.readthedocs.io/en/stable/objects.inv
@@ -88,8 +91,17 @@ plugins:
             - http://xarray.pydata.org/en/stable/objects.inv
           options:
             docstring_style: numpy
-            show_root_heading: true
+            relative_crossrefs: yes
+            separate_signature: true
+            show_root_heading: false
+            show_signature_annotations: true
             show_source: true
+            signature_crossrefs: true
+            summary:
+              attributes: true
+              classes: true
+              functions: true
+              modules: true
   # https://squidfunk.github.io/mkdocs-material/plugins/search/
   - search
   # Add clickable sections to the sidebar
@@ -99,6 +111,9 @@ plugins:
 markdown_extensions:
   # https://squidfunk.github.io/mkdocs-material/setup/extensions/python-markdown/#attribute-lists
   - attr_list
+  # https://squidfunk.github.io/mkdocs-material/reference/math/#katex-mkdocsyml
+  - pymdownx.arithmatex:
+      generic: true
   # Allow admonitions, useful for deprecation warnings
   # https://facelessuser.github.io/pymdown-extensions/extensions/blocks/plugins/admonition/
   - pymdownx.blocks.admonition
@@ -126,6 +141,14 @@ markdown_extensions:
   # Ensure that there are links to table of contents items
   - toc:
       permalink: "#"
+
+extra_javascript:
+  - javascripts/katex.js
+  - https://unpkg.com/katex@0/dist/katex.min.js
+  - https://unpkg.com/katex@0/dist/contrib/auto-render.min.js
+
+extra_css:
+  - https://unpkg.com/katex@0/dist/katex.min.css
 
 watch:
   - README.md

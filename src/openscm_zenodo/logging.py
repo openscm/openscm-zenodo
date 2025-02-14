@@ -4,20 +4,27 @@ Logging
 
 from __future__ import annotations
 
-import io
 import sys
 from pathlib import Path
-from typing import Any, Optional, Union
+from typing import TYPE_CHECKING, Optional, TypedDict, Union
 
 from loguru import logger
-from typing_extensions import TypeAlias
 
-LoggingConfigType: TypeAlias = Union[dict[str, list[dict[str, Any]]], None]
+if TYPE_CHECKING:
+    from loguru import HandlerConfig
+
+
+class ConfigLike(TypedDict):
+    """
+    Configuration-like to use with loguru
+    """
+
+    handlers: list[HandlerConfig]
 
 
 def get_default_config(
     level: str = "INFO",
-) -> dict[str, list[dict[str, Union[Union[io.TextIOWrapper, Any], str, bool]]]]:
+) -> ConfigLike:
     """
     Get default logging configuration
 
@@ -54,7 +61,7 @@ def get_default_config(
 
 def setup_logging(
     enable: bool,
-    logging_config: Optional[Union[Path, LoggingConfigType]] = None,
+    logging_config: Optional[Union[Path, ConfigLike]] = None,
     logging_level: Optional[str] = None,
 ) -> None:
     """
@@ -96,9 +103,7 @@ def setup_logging(
         logger.configure(handlers=config["handlers"])
 
     elif isinstance(logging_config, dict):
-        # mypy not happy about kwargs being passed here,
-        # fair enough I guess
-        logger.configure(**logging_config)  # type: ignore
+        logger.configure(**logging_config)
 
     else:
         # Type ignore while we wait for new release of loguru-config

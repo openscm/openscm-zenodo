@@ -1,4 +1,8 @@
 name: Bump version
+# For the time being, we still do this with pdm.
+# Honestly, it doesn't really matter,
+# but one day uv will have a bump command too and we can switch to that.
+# Relevant issue in uv: https://github.com/astral-sh/uv/issues/6298
 
 on:
   workflow_dispatch:
@@ -22,7 +26,11 @@ jobs:
   bump_version:
     name: "Bump version and create changelog"
     if: "!startsWith(github.event.head_commit.message, 'bump:')"
-    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        os: [ "ubuntu-latest" ]
+        python-version: [ "3.9" ]
+    runs-on: "${{ matrix.os }}"
     env:
       CI_COMMIT_EMAIL: "ci-runner@openscm-zenodo.invalid"
     steps:
@@ -33,9 +41,9 @@ jobs:
           token: "${{ secrets.PERSONAL_ACCESS_TOKEN }}"
 
       - name: Setup PDM
-        uses: pdm-project/setup-pdm@v4
+        uses: pdm-project/setup-pdm@v4.1
         with:
-          python-version: "3.9"
+          python-version: ${{ matrix.python-version }}
 
       - name: Install pdm-bump
         run: |
@@ -44,7 +52,7 @@ jobs:
       - uses: ./.github/actions/setup
         with:
           python-version: ${{ matrix.python-version }}
-          pdm-dependency-install-flags: "-G dev"
+          uv-dependency-install-flags: "--all-extras --group dev"
 
       - name: Create bump and changelog
         run: |
@@ -61,7 +69,7 @@ jobs:
           echo "Bumping to version $NEW_VERSION"
 
           # Build CHANGELOG
-          pdm run towncrier build --yes --version v$NEW_VERSION
+          uv run towncrier build --yes --version v$NEW_VERSION
 
           # Commit, tag and push
           git commit -a -m "bump: version $BASE_VERSION -> $NEW_VERSION"
