@@ -42,7 +42,7 @@ jobs:
       - name: docs
         run: |
           uv run typer openscm_zenodo.cli utils docs --output docs/cli/index.md --name openscm-zenodo
-          uv run mkdocs build --strict
+          ZENODO_TOKEN=${{ secrets.ZENODO_SANDBOX_TOKEN }} uv run mkdocs build --strict
       - uses: ./.github/actions/setup
         with:
           python-version: "3.11"
