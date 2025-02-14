@@ -51,7 +51,7 @@ jobs:
         run: |
           # Check CHANGELOG will build too
           uv run towncrier build --yes
-          uv run mkdocs build --strict
+          ZENODO_TOKEN=${{ secrets.ZENODO_SANDBOX_TOKEN }} uv run mkdocs build --strict
           # Just in case, undo the staged changes
           git restore --staged . && git restore .
 
