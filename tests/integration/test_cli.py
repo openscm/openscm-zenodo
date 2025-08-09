@@ -14,7 +14,11 @@ from typer.testing import CliRunner
 from openscm_zenodo.cli.app import app
 from openscm_zenodo.zenodo import ZenodoDomain, ZenodoInteractor, retrieve_metadata
 
-runner = CliRunner()
+try:
+    runner = CliRunner(mix_stderr=False)
+except TypeError:
+    # New typer version, no mix_stderr argument
+    runner = CliRunner()
 
 
 @pytest.mark.zenodo_token
