@@ -187,7 +187,7 @@ jobs:
       - name: Install
         run: |
           pip install --upgrade pip wheel
-          pip install .
+          pip install -r requirements-locked.txt
           pip install -r requirements-only-tests-min-locked.txt
       - name: Run tests
         run: |
