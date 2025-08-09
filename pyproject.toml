@@ -60,35 +60,54 @@ dev = [
     "towncrier==24.8.0",
     "types-tqdm>=4.66.0.20240417",
     "types-requests>=2.32.0.20240712",
+    "tomli-w>=1.2.0",
 ]
 docs = [
     # Key dependencies
     # ----------------
-    "attrs==24.3.0",
-    "mkdocs-autorefs==1.2.0",
+    "attrs==25.3.0",
+    "mkdocs-autorefs==1.4.2",
     "mkdocs-gen-files==0.5.0",
-    "mkdocs-literate-nav==0.6.1",
-    "mkdocs-material==9.5.49",
-    "mkdocs-section-index==0.3.9",
+    "mkdocs-literate-nav==0.6.2",
+    "mkdocs-material==9.6.16",
+    "mkdocs-section-index==0.3.10",
     "mkdocs==1.6.1",
-    "mkdocstrings-python-xref==1.6.2",
-    "mkdocstrings-python==1.13.0",
-    "pymdown-extensions==10.13",
-    "ruff==0.8.6",
+    "mkdocstrings-python-xref==1.16.3",
+    "mkdocstrings-python==1.16.12",
+    "pymdown-extensions==10.16.1",
+    "ruff==0.12.8",
     # Key dependencies for notebook_based_docs
     # ----------------------------------------
-    "jupyterlab==4.3.4",
-    "jupytext==1.16.6",
+    "jupyterlab==4.4.5",
+    "jupytext==1.17.2",
     "mkdocs-jupyter==0.25.1",
 ]
 # For minimum test dependencies.
 # These are used when running our minimum PyPI install tests.
 tests-min = [
-    "pytest-cov==6.0.0",
+    # Key dependencies
+    # ----------------
     "pytest==8.3.4",
+    # Implied by the key dependencies above
+    # -------------------------------------
+    "colorama==0.4.6 ; sys_platform == 'win32'",
+    "iniconfig==2.0.0",
+    "packaging==24.2",
+    "pluggy==1.5.0",
 ]
 # Full test dependencies.
 tests-full = [
+    # Key dependencies
+    # ----------------
+    "pytest-cov==6.0.0",
+    # Implied by the key dependencies above
+    # -------------------------------------
+    "colorama==0.4.6 ; sys_platform == 'win32'",
+    "coverage==7.6.10",
+    "iniconfig==2.0.0",
+    "packaging==24.2",
+    "pluggy==1.5.0",
+    "pytest==8.3.4",
 ]
 # Test dependencies
 # (partly split because liccheck uses toml,
@@ -104,16 +123,11 @@ all-dev = [
 ]
 
 [build-system]
-requires = [
-    "pdm-backend",
-    "pdm-build-locked",
-]
-build-backend = "pdm.backend"
+requires = ["uv_build>=0.8.7,<0.9.0"]
+build-backend = "uv_build"
 
-[tool.pdm]
-[tool.pdm.build]
-locked = true
-includes = [
+[tool.uv.build-backend]
+source-include = [
     "src/openscm_zenodo",
     "LICENCE",
 ]
