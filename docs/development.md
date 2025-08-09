@@ -48,8 +48,8 @@ should change depending on the updates to the code base.
 Releasing is semi-automated via a CI job.
 The CI job requires the type of version bump
 that will be performed to be manually specified.
-See the pdm-bump docs for the
-[list of available bump rules](https://github.com/carstencodes/pdm-bump#usage).
+See the `uv version` docs (specifically the `--bump` flag) for the
+[list of available bump rules](https://docs.astral.sh/uv/reference/cli/#uv-version).
 
 ### Standard process
 
@@ -57,7 +57,7 @@ The steps required are the following:
 
 1. Bump the version: manually trigger the "bump" workflow from the main branch
    (see here: [bump workflow](https://github.com/openscm/OpenSCM-zenodo/actions/workflows/bump.yaml)).
-   A valid "bump_rule" (see [pdm-bump's docs](https://github.com/carstencodes/pdm-bump#usage))
+   A valid "bump_rule" (see [uv's docs](https://docs.astral.sh/uv/reference/cli/#uv-version))
    will need to be specified.
    This will then trigger a draft release.
 
@@ -74,16 +74,15 @@ The steps required are the following:
    else
 
 1. Enjoy the newly available version
+[TODO: add in conda release instructions]
 
 #### Further details
 
-We use [pdm](https://pdm-project.org/en/latest/) for building our project,
-while [uv figures out how it wants to support building](https://github.com/astral-sh/uv/issues/3957).
-This gives us the added benefit that we can use
-[pdm-build-locked](https://pdm-build-locked.readthedocs.io/en/stable/)
-to build locked versions of our package.
-It is for these reasons that we have a pdm pre-commit hook
-and a `pdm.lock` file in our repository.
+We use [uv's build backend](https://docs.astral.sh/uv/concepts/build-backend) for building our project
+and `scripts/add-locked-targets-to-pyproject-toml.py`
+to provide locked extra groups for our package.
+Including locked extra groups is why we run `scripts/add-locked-targets-to-pyproject-toml.py`
+before any step related to building the package in the CI.
 
 ## Read the Docs
 
