@@ -24,7 +24,7 @@ This is a deliberate breaking change. We take the opportunity to:
 4. **Remove the CLI entirely** — the library becomes the only public surface.
 
 The one hard constraint to design around: InvenioRDM uses a **different metadata
-schema** from the legacy deposit form (see Part 5). That is the single biggest
+schema** from the legacy deposit form (see Part 6). That is the single biggest
 piece of work and the most visible break for downstream users.
 
 ---
@@ -76,7 +76,7 @@ from `ZENODO_TOKEN`.
 | `get_latest_deposition_id` | `get_latest_version_id(record_id)` | via `versions` / `links.latest` |
 | `get_concept_id` | `get_parent_id(record_id)` | InvenioRDM "parent" id (all-versions id) |
 | `update_metadata` | `update_metadata(record_id, metadata)` | `PUT /api/records/{id}/draft` |
-| `get_metadata` | `get_metadata(record_id, *, user_controlled_only=False)` | new schema (Part 5) |
+| `get_metadata` | `get_metadata(record_id, *, user_controlled_only=False)` | new schema (Part 6) |
 | `publish` | `publish(record_id)` | `POST .../draft/actions/publish` |
 | `upload_file_to_bucket_url` | `upload_file(record_id, path, *, verify_checksum=True)` | init→content→commit (Part 2) |
 | `upload_files` | `upload_files(record_id, paths, *, n_threads=4, verify_checksum=True)` | |
@@ -86,7 +86,10 @@ from `ZENODO_TOKEN`.
 | `remove_file_id` / `remove_files_by_id` | removed | no numeric file ids in the new API |
 | `get_bucket_url` | removed | no bucket in the new flow |
 | `get_bibtex_entry` | `get_bibtex(record_id)` | export via `Accept` header (verify) |
-| — | `reserve_doi(record_id)` → `str` | `POST .../draft/pids/doi` (Part 6) |
+| — | `list_files(record_id, *, draft=True)` → `dict[str, str]` | `GET .../files` — draft or published record (Parts 3, 5) |
+| — | `download_file(record_id, filename, dest, *, draft=False, ...)` → `Path` | `GET .../files/{name}/content` (Part 5) |
+| — | `download_files(record_id, dest_dir, *, filenames=None, draft=False, ...)` → `list[Path]` | Part 5 |
+| — | `reserve_doi(record_id)` → `str` | `POST .../draft/pids/doi` (Part 7) |
 | `get_response` | `_request(...)` (private) | routes through the session |
 
 ### 1.3 Module-level helpers
@@ -96,6 +99,9 @@ Keep a small functional surface for common one-shot tasks; rename for clarity:
 ```python
 def retrieve_metadata(record_id, client=None, *, user_controlled_only=False) -> Metadata
 def retrieve_bibtex(record_id, client=None) -> str          # was retrieve_bibtex_entry
+def retrieve_files(                                          # download (Part 5)
+    record_id, dest_dir, client=None, *, draft=False, filenames=None, ...
+) -> list[Path]
 def create_new_version(                                     # high-level convenience
     record_id,
     client,
@@ -148,6 +154,20 @@ Robustness, integrated here and in the client:
   `ChecksumMismatchError`, which is also in `tenacity`'s retry set so a corrupt
   transfer is retried before it fails. `verify_checksum=True` by default;
   opt-out for speed.
+- **MD5 timing logs.** MD5 hashing is CPU-bound and, for large files, can be a
+  non-trivial share of an upload/download and is easy to mistake for slow I/O.
+  So the single shared MD5 helper (`_md5_hex` / the streaming variant, reused by
+  upload here, `sync_files` in Part 3, and download in Part 5) logs its own
+  timing, gated behind logging levels so it is silent by default:
+  - a `logger.debug` at the **start** — `"Computing MD5 for {path} ({size})"`;
+  - a `logger.debug` on **completion** — elapsed seconds and derived MB/s;
+  - a `logger.info` (or `warning`) only when a single hash exceeds a threshold
+    (e.g. > a few seconds), so the "why is this slow?" case surfaces even at a
+    coarser level without spamming logs for small files.
+  Users flip this on via the retained `setup_logging(...)` (Part 8) — e.g. a
+  `DEBUG` level on the `openscm_zenodo` logger — to see whether hashing, not the
+  network, is the bottleneck. The messages use the same module `logger` as the
+  rest of the client so no extra configuration surface is needed.
 - **Two-phase safety.** A draft can be left with an initialised-but-uncommitted
   file if the process dies mid-upload. `upload_files` cleans up or surfaces
   partial state clearly rather than leaving an unpublishable draft silently.
@@ -222,7 +242,108 @@ new_id = create_new_version(
 
 ---
 
-## Part 5 — Metadata schema (the main migration cost)
+## Part 5 — File retrieval (download)
+
+Downloading files is the read-side counterpart to Part 2's upload. InvenioRDM
+serves file content on both **published records** and **drafts**, and the same
+shared session — which already sends `Authorization: Bearer <token>` on every
+request (Part 1.1) — is exactly what unlocks **restricted/embargoed** files.
+Public files download with or without a token; restricted ones require a token
+whose owner has access and otherwise return `403` (surfaced as
+`ZenodoHTTPError`). There is deliberately **no separate code path for embargoed
+records** — access is just the token on the session, so the same methods cover
+public and login-only records.
+
+### 5.1 Endpoints
+
+| Target | List | Content |
+|---|---|---|
+| Published record | `GET /api/records/{id}/files` | `GET /api/records/{id}/files/{filename}/content` |
+| Draft | `GET /api/records/{id}/draft/files` | `GET /api/records/{id}/draft/files/{filename}/content` |
+
+Each listing entry carries `key` (filename), `size`, and `checksum`
+(`"md5:<hex>"`) — the same metadata `sync_files` (Part 3) already relies on.
+
+### 5.2 `list_files` generalised
+
+Part 3's `list_files` is generalised to serve both sync and download by adding a
+`draft` switch (it defaults to `True` to preserve the Part-3 sync behaviour):
+
+```python
+def list_files(self, record_id: str, *, draft: bool = True) -> dict[str, str]:
+    """Map filename -> md5 hex. `draft=True` lists the draft's files,
+    `draft=False` the published record's."""
+```
+
+### 5.3 Methods
+
+```python
+def download_file(
+    self,
+    record_id: str,
+    filename: str,
+    dest: Path,                 # target file path, or a directory to drop `filename` into
+    *,
+    draft: bool = False,
+    verify_checksum: bool = True,
+    overwrite: bool = False,
+) -> Path:
+    """Stream one file's content to `dest`."""
+
+def download_files(
+    self,
+    record_id: str,
+    dest_dir: Path,
+    *,
+    filenames: Optional[Collection[str]] = None,   # None -> every file on the record
+    draft: bool = False,
+    n_threads: int = 4,
+    verify_checksum: bool = True,
+    overwrite: bool = False,
+) -> list[Path]:
+    """List the record's files, then download them into `dest_dir`."""
+```
+
+`draft=False` (published record) is the default — the common case is pulling a
+released dataset. Pass `draft=True` to fetch from an unpublished draft.
+
+Implementation mirrors the upload path in reverse:
+
+- **Streaming to disk** via `response.iter_content` (chunked), with a `tqdm`
+  progress bar sized from the listing's `size` and `timeout_upload` for the long
+  transfer. Write to a temporary `*.part` file and atomically rename on success,
+  so an interrupted download never leaves a truncated file in place.
+- **Checksum verification.** Compute the local MD5 while streaming and compare
+  against the listing's `checksum`. On mismatch raise `ChecksumMismatchError`
+  (reused from Part 2), which is in `tenacity`'s retry set so a corrupt transfer
+  is re-fetched before it fails. `verify_checksum=True` by default.
+- **Retry.** Ordinary `GET` retries come from the shared session's
+  `urllib3.Retry` (Part 2). The streaming read is wrapped in the same `tenacity`
+  retry as uploads, so a mid-stream connection drop restarts the download and
+  resets the progress bar and `*.part` file.
+- **Overwrite guard.** Refuse to clobber an existing destination unless
+  `overwrite=True`, and skip re-downloading a file whose local MD5 already
+  matches the remote checksum (cheap, idempotent re-runs, matching `sync_files`'
+  spirit).
+
+### 5.4 Module-level helper
+
+```python
+def retrieve_files(
+    record_id, dest_dir, client=None, *,
+    draft=False, filenames=None, n_threads=4,
+    verify_checksum=True, overwrite=False,
+) -> list[Path]
+```
+
+A one-shot download that sits alongside `retrieve_metadata` / `retrieve_bibtex`.
+It builds a default `ZenodoClient` when `client is None`; that client picks up
+`ZENODO_TOKEN` from the environment, which is all embargoed/login-only access
+needs.
+
+---
+
+## Part 6 — Metadata schema (the main migration cost)
 
 InvenioRDM's metadata schema differs substantially from the legacy deposit form.
 This is a **breaking change for every caller** and the bulk of the work.
@@ -236,7 +357,7 @@ Key differences to handle and document:
 - Access: an `access` object (`record`/`files` = `public`/`restricted`) replaces
   `access_right`.
 - Licenses: `metadata.rights[]` with SPDX ids, e.g. `[{"id": "cc-by-sa-4.0"}]`.
-- DOI/PIDs: under `pids` (Part 6), not `prereserve_doi`.
+- DOI/PIDs: under `pids` (Part 7), not `prereserve_doi`.
 
 Representative shape returned/accepted:
 
@@ -274,7 +395,7 @@ Work items:
 
 ---
 
-## Part 6 — DOI reservation
+## Part 7 — DOI reservation
 
 Replaces the legacy `prereserve_doi` flag. Add `reserve_doi(record_id) -> str`:
 `POST /api/records/{id}/draft/pids/doi` reserves a DOI on the draft; the reserved
@@ -284,7 +405,7 @@ old `update-metadata --reserve-doi` CLI flag provided, as a proper method.
 
 ---
 
-## Part 7 — Remove the CLI
+## Part 8 — Remove the CLI
 
 The `typer` app is deleted; the library is the only interface. Every CLI
 capability maps to a Python call:
@@ -317,26 +438,39 @@ optional extra for file-based logging config.
 
 ---
 
-## Part 8 — Packaging, docs, tests
+## Part 9 — Packaging, docs, tests
 
 - **pyproject.toml:** remove `[project.scripts]` and `typer`; add `tenacity>=8`;
   fix `description` ("Python library for uploading to Zenodo."), the `keyords`
   typo → `keywords` (drop `"command-line"`), and update classifiers to a library.
 - **Docs/README:** rewrite all examples as Python using `ZenodoClient` and the
-  helpers. Add an InvenioRDM metadata reference. Delete the CLI docs tree.
+  helpers, including a download example (`retrieve_files` / `download_files`)
+  that shows fetching from both published and draft records and notes that
+  embargoed/login-only records just need `ZENODO_TOKEN` set. Add an InvenioRDM
+  metadata reference. Delete the CLI docs tree.
   Add a prominent **migration guide** covering (a) the new metadata schema and
   (b) the CLI → Python mapping. Bump to a new major version and lead the
   changelog with the breaking change.
 - **Tests:**
   - Sandbox integration tests for the full draft lifecycle: `create_record` →
     `upload_files` (init/content/commit) → `publish` → `new_version` with each
-    `FilesMode` → `sync_files`. (Sandbox runs InvenioRDM, so it is the correct
-    target.)
-  - Unit tests for the **metadata translation/validation** (Part 5) — highest
+    `FilesMode` → `sync_files` → `download_files` (round-trip the published files
+    into a temp dir and verify checksums). Include a restricted-access download
+    (create a restricted record, then fetch it with vs. without a token) to
+    exercise the embargoed/login-only path. (Sandbox runs InvenioRDM, so it is
+    the correct target.)
+  - Unit tests for the **metadata translation/validation** (Part 6) — highest
     risk.
   - Unit tests for retry (mock 429→200), checksum verification (mock a
     mismatching commit checksum → `ChecksumMismatchError`), `sync_files` diffing,
     `reserve_doi`, and `load_metadata`.
+  - Unit tests for the MD5 timing logs: with a `caplog`-style capture, assert
+    the shared helper emits the start/completion `debug` records and the
+    over-threshold `info`/`warning`, and that it is silent below the threshold.
+  - Unit tests for download (mock the file listing + streamed content):
+    checksum mismatch → `ChecksumMismatchError`, the `overwrite` guard, the
+    skip-when-local-MD5-matches fast path, and `draft=True`/`draft=False`
+    hitting the right endpoints.
   - towncrier fragment for the breaking release.
 
 ---
@@ -347,7 +481,7 @@ optional extra for file-based logging config.
    session, `urllib3.Retry` adapter, `_request`, exceptions module. Bearer auth.
 2. **Read paths** — `get_record`, `get_draft`, `get_metadata`, `get_bibtex`,
    `list_files`. Cheap, and they exercise the transport.
-3. **Metadata (Part 5)** — schema rewrite + `load_metadata` + validation. Biggest
+3. **Metadata (Part 6)** — schema rewrite + `load_metadata` + validation. Biggest
    item; do it early so everything downstream uses the right shape.
 4. **Write paths** — `create_record`, `update_metadata`, `publish`,
    `reserve_doi`, `new_version` / `import_files`, `delete_files`.
@@ -355,7 +489,10 @@ optional extra for file-based logging config.
    upload retry, checksum verification, `upload_files` parallelism.
 6. **Sync + versions (Parts 3–4)** — `sync_files`, then `create_new_version`
    with `FilesMode`.
-7. **Remove CLI + packaging/docs/tests (Parts 7–8).**
+7. **Download (Part 5)** — `list_files(draft=...)`, `download_file` /
+   `download_files` / `retrieve_files`. Reuses the session, checksum helper, and
+   `tenacity` retry from step 5, so it slots in cheaply once uploads exist.
+8. **Remove CLI + packaging/docs/tests (Parts 8–9).**
 
 Steps 1–2 stand up the new transport; step 3 de-risks the schema early; 4–6 build
 the write/upload/version features on it; 7 finishes the breaking release.
