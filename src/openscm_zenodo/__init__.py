@@ -1,5 +1,5 @@
 """
-Command-line tool for uploading to zenodo
+Python API and command-line tool for interacting with zenodo.
 """
 
 import importlib.metadata

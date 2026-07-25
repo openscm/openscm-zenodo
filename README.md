@@ -1,7 +1,7 @@
 <!--- --8<-- [start:description] -->
 # OpenSCM Zenodo
 
-Command-line tool for uploading to zenodo.
+Python API and command-line tool for interacting with zenodo.
 
 **Key info :**
 [![Docs](https://readthedocs.org/projects/openscm-zenodo/badge/?version=latest)](https://openscm-zenodo.readthedocs.io)

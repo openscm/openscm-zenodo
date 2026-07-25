@@ -7,11 +7,10 @@ CLI app
 
 import json
 from pathlib import Path
-from typing import Annotated, Optional, Union
+from typing import Annotated, TypeAlias, Union
 
 import typer
 from loguru import logger
-from typing_extensions import TypeAlias
 
 import openscm_zenodo
 from openscm_zenodo.logging import setup_logging
@@ -39,12 +38,12 @@ DEPOSITION_ID_TYPE: TypeAlias = Annotated[
 ]
 
 FILES_TO_UPLOAD_TYPE: TypeAlias = Annotated[
-    Optional[list[Path]],
+    list[Path] | None,
     typer.Argument(help="Files to upload to the Zenodo deposition"),
 ]
 
 METADATA_FILE_TYPE: TypeAlias = Annotated[
-    Optional[Path],
+    Path | None,
     typer.Option(
         exists=True,
         dir_okay=False,
@@ -87,7 +86,7 @@ ZENODO_DOMAIN_TYPE: TypeAlias = Annotated[
 ]
 
 
-def version_callback(version: Optional[bool]) -> None:
+def version_callback(version: bool | None) -> None:
     """
     If requested, print the version string and exit
     """
@@ -99,7 +98,7 @@ def version_callback(version: Optional[bool]) -> None:
 @app.callback()
 def cli(
     version: Annotated[
-        Optional[bool],
+        bool | None,
         typer.Option(
             "--version",
             help="Print the version number and exit",
@@ -108,7 +107,7 @@ def cli(
         ),
     ] = None,
     no_logging: Annotated[
-        Optional[bool],
+        bool | None,
         typer.Option(
             "--no-logging",
             help="""Disable all logging.
@@ -117,7 +116,7 @@ If supplied, overrides `--logging-config`""",
         ),
     ] = None,
     logging_level: Annotated[
-        Optional[str],
+        str | None,
         typer.Option(
             help="""Logging level to use.
 
@@ -125,7 +124,7 @@ This is only applied if no other logging configuration flags are supplied."""
         ),
     ] = None,
     logging_config: Annotated[
-        Optional[Path],
+        Path | None,
         typer.Option(
             help="""Path to the logging configuration file.
 
@@ -284,7 +283,7 @@ def remove_files_command(
     deposition_id: DEPOSITION_ID_TYPE,
     token: TOKEN_TYPE,
     files_to_remove: Annotated[
-        Optional[list[Path]],
+        list[Path] | None,
         typer.Argument(help="Files to remove from the Zenodo deposition"),
     ] = None,
     all: Annotated[bool, typer.Option("--all", help="Remove all files")] = False,

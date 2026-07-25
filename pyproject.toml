@@ -1,13 +1,13 @@
 [project]
 name = "openscm-zenodo"
 version = "0.5.1a1"
-description = "Command-line tool for uploading to zenodo."
+description = "Python API and command-line tool for interacting with zenodo."
 authors = [
     { name = "Zebedee Nicholls", email = "zebedee.nicholls@climate-energy-college.org" },
     { name = "Jared Lewis", email = "jared.lewis@climate-energy-college.org" },
 ]
 license = {text = "3-Clause BSD License"}
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 dependencies = [
     "attrs>=22.0",
     "loguru>=0.5",
@@ -27,11 +27,11 @@ classifiers = [
     "Programming Language :: Python",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3 :: Only",
-    "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
     "Typing :: Typed",
 ]
 keyords = ["openscm", "zenodo", "command-line"]
@@ -57,25 +57,26 @@ dev = [
     "pre-commit==4.0.1",
     # Required for liccheck, see https://github.com/dhatim/python-license-check/pull/113
     "setuptools==75.6.0",
-    "towncrier==24.8.0",
     "types-tqdm>=4.66.0.20240417",
     "types-requests>=2.32.0.20240712",
-    "tomli-w>=1.2.0",
+    "tomli==2.2.1 ; python_full_version < '3.11'",
+    "tomli-w==1.2.0",
+    "towncrier==24.8.0",
 ]
 docs = [
     # Key dependencies
     # ----------------
     "attrs==25.3.0",
-    "mkdocs-autorefs==1.4.2",
-    "mkdocs-gen-files==0.5.0",
-    "mkdocs-literate-nav==0.6.2",
-    "mkdocs-material==9.6.16",
-    "mkdocs-section-index==0.3.10",
-    "mkdocs==1.6.1",
-    "mkdocstrings-python-xref==1.16.3",
-    "mkdocstrings-python==1.16.12",
-    "pymdown-extensions==10.16.1",
-    "ruff==0.12.8",
+    "mkdocs-autorefs==1.4.4",
+    "mkdocs-gen-files==0.6.1",
+    "mkdocs-literate-nav==0.6.3",
+    "mkdocs-material==9.7.6",
+    "mkdocs-section-index==0.3.12",
+    "mkdocstrings-python-xref==2.1.1",
+    "mkdocstrings-python==2.0.3",
+    "properdocs==1.6.7",
+    "pymdown-extensions==10.21.3",
+    "ruff==0.15.12",
     # Key dependencies for notebook_based_docs
     # ----------------------------------------
     "jupyterlab==4.4.5",
@@ -88,26 +89,11 @@ tests-min = [
     # Key dependencies
     # ----------------
     "pytest==8.3.4",
-    # Implied by the key dependencies above
-    # -------------------------------------
-    "colorama==0.4.6 ; sys_platform == 'win32'",
-    "iniconfig==2.0.0",
-    "packaging==24.2",
-    "pluggy==1.5.0",
 ]
-# Full test dependencies.
 tests-full = [
     # Key dependencies
     # ----------------
     "pytest-cov==6.0.0",
-    # Implied by the key dependencies above
-    # -------------------------------------
-    "colorama==0.4.6 ; sys_platform == 'win32'",
-    "coverage==7.6.10",
-    "iniconfig==2.0.0",
-    "packaging==24.2",
-    "pluggy==1.5.0",
-    "pytest==8.3.4",
 ]
 # Test dependencies
 # (partly split because liccheck uses toml,
@@ -133,9 +119,7 @@ source-include = [
 ]
 
 [tool.coverage.run]
-source = [
-    "src",
-]
+source = ["openscm_zenodo"]
 branch = true
 
 [tool.coverage.report]
@@ -158,6 +142,15 @@ show_error_context = true
 warn_unreachable = true
 follow_imports = "normal"
 
+[tool.ty.environment]
+extra-paths = ["stubs"]
+python-version = "3.10"
+
+[tool.ty.rules]
+
+[tool.ty.src]
+include = ["src"]
+
 [tool.jupytext]
 formats = "ipynb,py:percent"
 
@@ -173,7 +166,7 @@ doctest_optionflags = [
 src = [
     "src",
 ]
-target-version = "py39"
+target-version = "py310"
 line-length = 88
 
 [tool.ruff.lint]
@@ -256,9 +249,12 @@ authorized_licenses = [
     "bsd license",
     "BSD 3-Clause",
     "BSD-3-Clause",
+    # numpy special case
+    "BSD-3-Clause AND 0BSD AND MIT AND Zlib AND CC0-1.0",
     "CC0",
     "apache",
     "apache 2.0",
+    "apache-2.0",
     "apache software",
     "apache software license",
     "Apache License, Version 2.0",

@@ -5,7 +5,7 @@ on:
     inputs:
       bump_rule:
         type: choice
-        description: How to bump the project's version (see https://docs.astral.sh/uv/reference/cli/#uv-version)
+        description: How to bump the project's version (see https://docs.astral.sh/uv/reference/cli/#uv-version or `uv version --help`)
         options:
           - patch
           - minor
@@ -31,7 +31,7 @@ jobs:
       CI_COMMIT_EMAIL: "ci-runner@openscm-zenodo.invalid"
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0
           token: "${{ secrets.PERSONAL_ACCESS_TOKEN }}"
@@ -46,33 +46,22 @@ jobs:
           git config --global user.name "$GITHUB_ACTOR"
           git config --global user.email "$CI_COMMIT_EMAIL"
 
-          BASE_VERSION=`sed -ne 's/^version = "\([0-9\.post]*\)"/\1/p' pyproject.toml`
-          echo "Bumping from version $BASE_VERSION"
-
-          # Bump
-          uv version --bump ${{ github.event.inputs.bump_rule }}
-
-          NEW_VERSION=`sed -ne 's/^version = "\([0-9\.]*\)"/\1/p' pyproject.toml`
-          echo "Bumping to version $NEW_VERSION"
-
-          # Build CHANGELOG
-          uv run towncrier build --yes --version v$NEW_VERSION
-
-          # Commit, tag and push
-          git commit -a -m "bump: version $BASE_VERSION -> $NEW_VERSION"
-          git tag v$NEW_VERSION
-          git push && git push --tags
-
-          # Bump to alpha (so that future commits do not have the same
-          # version as the tagged commit)
-          BASE_VERSION=`sed -ne 's/^version = "\([0-9\.]*\)"/\1/p' pyproject.toml`
-
-          # Bump to pre-release of next version
-          uv version --bump post
-
-          NEW_VERSION=`sed -ne 's/^version = "\([0-9\.post]*\)"/\1/p' pyproject.toml`
+          BASE_VERSION=`uv version --short`
+          NEW_VERSION=`uv version --bump ${{ github.event.inputs.bump_rule }} --short --no-sync`
           echo "Bumping version $BASE_VERSION > $NEW_VERSION"
-
-          # Commit and push
-          git commit -a -m "bump(pre-release): version $BASE_VERSION > $NEW_VERSION"
+          # Build CHANGELOG
+          uv sync --group dev
+          uv run --group dev towncrier build --yes --version v$NEW_VERSION
+          # Commit and tag (no verify to avoid pre-commit)
+          git commit --no-verify -a -m "bump: version $BASE_VERSION > $NEW_VERSION"
+          git tag v$NEW_VERSION
+          # Bump to post
+          # (so that future commits do not have the same version as the tagged commit)
+          BASE_VERSION=`uv version --short`
+          NEW_VERSION=`uv version --bump post --short --no-sync`
+          echo "Bumping version $BASE_VERSION > $NEW_VERSION"
+          # Commit (no verify to avoid pre-commit)
+          git commit --no-verify -a -m "bump(pre-release): version $BASE_VERSION > $NEW_VERSION"
+          # Push commits and tags
           git push
+          git push --tags

@@ -1,5 +1,5 @@
 site_name: OpenSCM Zenodo
-site_description: Command-line tool for uploading to zenodo.
+site_description: Python API and command-line tool for interacting with zenodo.
 site_url: https://openscm-zenodo.readthedocs.io
 edit_uri: blob/master/docs/
 
@@ -14,8 +14,7 @@ theme:
     # Light mode (toggle to dark mode)
     - scheme: default
       # Other colour choices at https://squidfunk.github.io/mkdocs-material/setup/changing-the-colors/#color-palette
-      primary: blue
-      accent: orange
+      primary: blue-grey
       # More info on toggles at https://squidfunk.github.io/mkdocs-material/setup/changing-the-colors/#color-palette-toggle
       toggle:
         icon: material/weather-night
@@ -23,8 +22,7 @@ theme:
 
     # Dark mode (toggle back to light mode)
     - scheme: slate
-      primary: deep orange
-      accent: blue
+      primary: pink
       toggle:
         icon: material/brightness-7
         name: Switch to light mode
@@ -91,7 +89,7 @@ plugins:
             # # https://github.com/tqdm/tqdm/issues/705
             # - https://tqdm.github.io/objects.inv
             - https://validators.readthedocs.io/en/stable/objects.inv
-            - http://xarray.pydata.org/en/stable/objects.inv
+            - https://docs.xarray.dev/en/stable/objects.inv
           options:
             # It turns out that xref does this check without considering config.
             # As a result, every docstring is parsed as a google-style docstring.
@@ -164,6 +162,8 @@ extra_javascript:
 
 extra_css:
   - https://unpkg.com/katex@0/dist/katex.min.css
+
+copyright: Copyright &copy; 2026, openscm-zenodo contributors
 
 watch:
   - README.md

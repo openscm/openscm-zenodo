@@ -11,11 +11,16 @@ Only works with uv.
 from __future__ import annotations
 
 import copy
+import shutil
 import subprocess
 from pathlib import Path
 
 import tomli_w
-import tomllib
+
+try:
+    import tomllib
+except ModuleNotFoundError:
+    import tomli as tomllib
 
 
 def parse_uv_export_output(raw: str) -> list[str]:
@@ -61,7 +66,7 @@ def main():
     ):
         uv_export_res = subprocess.run(  # noqa: S603
             (
-                "uv",
+                shutil.which("uv"),
                 "export",
                 "--no-hashes",
                 "--no-annotate",
