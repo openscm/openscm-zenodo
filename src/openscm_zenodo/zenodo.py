@@ -7,19 +7,31 @@ from __future__ import annotations
 import concurrent.futures
 import json
 import logging
+import os
 import os.path
-from collections.abc import Collection, Iterable
+from collections.abc import Collection, Iterable, Mapping
 from enum import Enum, auto
 from pathlib import Path
-from typing import Any, Optional, Union
+from types import TracebackType
+from typing import (
+    Any,
+    Literal,
+    NewType,
+    NoReturn,
+    TypeAlias,
+    overload,
+)
 
 import requests
 import tqdm
 import tqdm.utils
 from attrs import define, field
+from dotenv import find_dotenv, load_dotenv
 from loguru import logger
-from typing_extensions import TypeAlias
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
+from openscm_zenodo.exceptions import MissingTokenError, ZenodoError, ZenodoHTTPError
 from openscm_zenodo.logging import mask_token
 
 _LOGGER = logging.getLogger(__name__)
@@ -69,6 +81,646 @@ class RestAction(Enum):
 
 MetadataType: TypeAlias = dict[str, dict[str, str]]
 
+RecordID = NewType("RecordID", str)
+"""
+The ID of a single version of a record
+
+This is a plain `str` at runtime.
+It exists so that type checkers can tell the difference
+between the ID of one version of a record
+and the ID of the record's parent
+(i.e. [`ParentID`][openscm_zenodo.zenodo.ParentID]).
+Zenodo accepts both in the same places
+and will happily return a wrong-but-successful answer if you mix them up.
+"""
+
+ParentID = NewType("ParentID", str)
+"""
+The ID which refers to all versions of a record
+
+See [`RecordID`][openscm_zenodo.zenodo.RecordID] for why this is its own type.
+"""
+
+ZENODO_TOKEN_ENV_VAR = "ZENODO_TOKEN"  # noqa: S105 # this is a name, not a token
+"""Environment variable from which we read a Zenodo token"""
+
+ZENODO_SANDBOX_TOKEN_ENV_VAR = "ZENODO_SANDBOX_TOKEN"  # noqa: S105 # a name too
+"""
+Environment variable from which we read a Zenodo sandbox token
+
+Sandbox and production tokens are not interchangeable,
+so this is only used when interacting with
+[`ZenodoDomain.sandbox`][openscm_zenodo.zenodo.ZenodoDomain].
+"""
+
+
+def get_zenodo_domain_url(zenodo_domain: str | ZenodoDomain) -> str:
+    """
+    Get the URL of a Zenodo domain
+
+    Parameters
+    ----------
+    zenodo_domain
+        Zenodo domain of interest
+
+    Returns
+    -------
+    :
+        URL of `zenodo_domain`, without any trailing slash
+
+    Examples
+    --------
+    >>> get_zenodo_domain_url(ZenodoDomain.sandbox)
+    'https://sandbox.zenodo.org'
+    >>> get_zenodo_domain_url("https://zenodo.org/")
+    'https://zenodo.org'
+    """
+    if isinstance(zenodo_domain, ZenodoDomain):
+        return zenodo_domain.value
+
+    return zenodo_domain.rstrip("/")
+
+
+@overload
+def resolve_token(
+    token: str | None = ...,
+    *,
+    zenodo_domain: str | ZenodoDomain = ...,
+    env: Mapping[str, str] | None = ...,
+    required: Literal[False] = False,
+    description: str = ...,
+) -> str | None: ...
+
+
+@overload
+def resolve_token(
+    token: str | None = ...,
+    *,
+    zenodo_domain: str | ZenodoDomain = ...,
+    env: Mapping[str, str] | None = ...,
+    required: Literal[True],
+    description: str = ...,
+) -> str: ...
+
+
+def resolve_token(
+    token: str | None = None,
+    *,
+    zenodo_domain: str | ZenodoDomain = ZenodoDomain.production,
+    env: Mapping[str, str] | None = None,
+    required: bool = False,
+    description: str = "interact with Zenodo",
+) -> str | None:
+    """
+    Resolve the token to use for interacting with Zenodo
+
+    This is the one place that knows where tokens come from,
+    so the library, the command-line interface and the tests
+    cannot disagree about where a token came from.
+    In order of precedence, highest first, we use:
+
+    1. `token`, if it is supplied
+    1. `ZENODO_SANDBOX_TOKEN`, but only if `zenodo_domain` is the sandbox
+    1. `ZENODO_TOKEN`
+
+    A `.env` file is not read here.
+
+    Parameters
+    ----------
+    token
+        Token supplied by the caller.
+
+        An empty string is treated the same way as no token at all.
+
+    zenodo_domain
+        Zenodo domain that the token will be used with.
+
+        Sandbox and production tokens are not interchangeable,
+        so this determines whether `ZENODO_SANDBOX_TOKEN` is considered.
+
+    env
+        Environment in which to look for tokens.
+
+        If not supplied, we use
+        [`os.environ`][os.environ].
+
+    required
+        Does the interaction we are resolving a token for require one?
+
+        The default, `False`, returns `None` if no token can be resolved,
+        because unauthenticated reads of public records are supported.
+        Pass `True` for interactions which cannot work without a token,
+        so that they fail before any request goes out.
+
+    description
+        Description of the interaction that needs a token.
+
+        Only used when `required` is `True`.
+        This is injected into the error message,
+        so it should complete the sentence
+        "A Zenodo token is required to ...".
+
+    Returns
+    -------
+    :
+        The resolved token.
+
+        This is `None` if no token could be resolved and `required` is `False`.
+
+    Raises
+    ------
+    MissingTokenError
+        No token could be resolved and `required` is `True`
+
+    Examples
+    --------
+    >>> resolve_token("supplied-directly", env={})
+    'supplied-directly'
+
+    >>> resolve_token(env={"ZENODO_TOKEN": "from-the-environment"})
+    'from-the-environment'
+
+    Sandbox tokens are only used with the sandbox domain
+
+    >>> env = {"ZENODO_SANDBOX_TOKEN": "sandbox-token", "ZENODO_TOKEN": "prod-token"}
+    >>> resolve_token(env=env, zenodo_domain=ZenodoDomain.sandbox)
+    'sandbox-token'
+    >>> resolve_token(env=env, zenodo_domain=ZenodoDomain.production)
+    'prod-token'
+
+    If nothing resolves, we return `None`
+
+    >>> resolve_token(env={}) is None
+    True
+
+    unless the interaction requires a token
+
+    >>> resolve_token(env={}, required=True)  # doctest: +IGNORE_EXCEPTION_DETAIL
+    Traceback (most recent call last):
+    ...
+    openscm_zenodo.exceptions.MissingTokenError
+    """
+    resolved = None
+
+    if token:
+        logger.debug("Using the token supplied by the caller")
+        resolved = token
+
+    else:
+        if env is None:
+            env = os.environ
+
+        if get_zenodo_domain_url(zenodo_domain) == ZenodoDomain.sandbox.value:
+            sandbox_token = env.get(ZENODO_SANDBOX_TOKEN_ENV_VAR)
+            if sandbox_token:
+                logger.debug(f"Using the token from ${ZENODO_SANDBOX_TOKEN_ENV_VAR}")
+                resolved = sandbox_token
+
+        if resolved is None:
+            zenodo_token = env.get(ZENODO_TOKEN_ENV_VAR)
+            if zenodo_token:
+                logger.debug(f"Using the token from ${ZENODO_TOKEN_ENV_VAR}")
+                resolved = zenodo_token
+
+    if resolved is None:
+        logger.debug("No Zenodo token could be resolved")
+
+        if required:
+            raise MissingTokenError(
+                description, zenodo_domain=get_zenodo_domain_url(zenodo_domain)
+            )
+
+    return resolved
+
+
+def load_env_file(
+    env_file: Path | None = None,
+    *,
+    override: bool = False,
+) -> Path | None:
+    """
+    Load environment variables from a `.env` file
+
+    This is deliberately never called on import.
+    The command-line interface calls it before running a command,
+    and users who want the same behaviour in a script or notebook
+    can call it themselves.
+
+    Parameters
+    ----------
+    env_file
+        The `.env` file to load.
+
+        If not supplied, we search for one,
+        starting from the current working directory
+        and walking up the directory tree.
+
+    override
+        Should the values in `env_file` override variables
+        which are already set in the environment?
+
+        The default, `False`,
+        is what allows a `.env` file to be the lowest-precedence source of a token
+        (see [`resolve_token`][openscm_zenodo.zenodo.resolve_token]).
+
+    Returns
+    -------
+    :
+        The file that was loaded, or `None` if no file was found
+
+    Raises
+    ------
+    FileNotFoundError
+        `env_file` was supplied, but does not exist
+    """
+    if env_file is None:
+        found = find_dotenv(usecwd=True)
+        if not found:
+            logger.debug("No `.env` file found")
+
+            return None
+
+        env_file = Path(found)
+
+    elif not env_file.exists():
+        msg = f"The supplied env file does not exist: {env_file}"
+
+        raise FileNotFoundError(msg)
+
+    logger.debug(f"Loading environment variables from {env_file}")
+    load_dotenv(env_file, override=override)
+
+    return env_file
+
+
+def build_session(
+    *,
+    max_retries: int = 5,
+    backoff_factor: float = 1.0,
+    retry_status_forcelist: tuple[int, ...] = (429, 500, 502, 503, 504),
+) -> requests.Session:
+    """
+    Build a session for interacting with Zenodo
+
+    This is the only place where our retry policy is expressed.
+    If you want different behaviour,
+    build a session here (or however you like)
+    and pass it to [`ZenodoClient`][openscm_zenodo.zenodo.ZenodoClient],
+    e.g.
+
+    ```python
+    client = ZenodoClient(session=build_session(max_retries=10, backoff_factor=2.0))
+    ```
+
+    Parameters
+    ----------
+    max_retries
+        Maximum number of times to retry a request before giving up
+
+    backoff_factor
+        Backoff factor to apply between retries.
+
+        Zenodo's `Retry-After` header is respected where it is supplied,
+        this only applies when it is not.
+
+    retry_status_forcelist
+        HTTP status codes which trigger a retry
+
+    Returns
+    -------
+    :
+        Session with our retry policy mounted for both HTTP and HTTPS
+
+    Notes
+    -----
+    We retry on all HTTP methods, not just the idempotent ones.
+    The failure we actually see from Zenodo is rate limiting (`429`),
+    which is safe to retry on any method
+    because the request was rejected before it was processed.
+    The trade-off is that a `500` from a `POST`
+    is also retried, even though Zenodo may have processed it;
+    in exchange, transient failures during long uploads do not kill the run.
+
+    Retries do not apply to the streaming upload of a file's content.
+    That request cannot be replayed by the transport layer,
+    so it is retried a level up.
+    """
+    retry = Retry(
+        total=max_retries,
+        backoff_factor=backoff_factor,
+        status_forcelist=list(retry_status_forcelist),
+        # Retry all methods, see the note in the docstring
+        allowed_methods=None,
+        respect_retry_after_header=True,
+        # Hand the last response back to us,
+        # so we can raise an error that includes Zenodo's explanation
+        # rather than urllib3's.
+        raise_on_status=False,
+    )
+
+    adapter = HTTPAdapter(max_retries=retry)
+
+    session = requests.Session()
+    session.mount("http://", adapter)
+    session.mount("https://", adapter)
+
+    return session
+
+
+def _repr_token(token: str | None) -> str:
+    """Get the `repr` to use for a token, i.e. never the token itself"""
+    return "None" if token is None else "***"
+
+
+def _repr_session(session: requests.Session | None) -> str:
+    """
+    Get the `repr` to use for a session
+
+    The default `repr` of a session includes its memory address,
+    which is noise and makes any doctest that shows a client unrunnable.
+    """
+    return "None" if session is None else f"<{type(session).__qualname__}>"
+
+
+@define
+class ZenodoClient:
+    """
+    Client for interacting with Zenodo's InvenioRDM API
+
+    Examples
+    --------
+    Neither the token nor the session leaks noise into the `repr`
+
+    >>> client = ZenodoClient(token="a-real-token")
+    >>> "a-real-token" in repr(client)
+    False
+    >>> "token=***" in repr(client)
+    True
+    >>> "session=<Session>" in repr(client)
+    True
+    """
+
+    token: str | None = field(default=None, repr=_repr_token)
+    """
+    Token to use for authenticating interactions with the Zenodo domain
+
+    If not supplied, we resolve one with
+    [`resolve_token`][openscm_zenodo.zenodo.resolve_token],
+    which may also come up empty.
+    Reads of public records work without a token,
+    everything else raises
+    [`MissingTokenError`][openscm_zenodo.exceptions.MissingTokenError]
+    when it is used.
+    """
+
+    zenodo_domain: str | ZenodoDomain = ZenodoDomain.production
+    """Zenodo domain to interact with"""
+
+    timeout: int = 10
+    """Timeout to apply to requests calls"""
+
+    timeout_upload: int = 60 * 60
+    """Timeout to apply to uploads"""
+
+    session: requests.Session | None = field(default=None, repr=_repr_session)
+    """
+    Session to use for interacting with Zenodo
+
+    If not supplied, we build one with
+    [`build_session`][openscm_zenodo.zenodo.build_session].
+    Supply your own if you need different transport behaviour.
+
+    We never modify a session that was handed to us.
+    In particular, authentication is applied per request,
+    not written onto the session's headers.
+    """
+
+    _owns_session: bool = field(init=False, default=False)
+    """
+    Did we build [`session`][openscm_zenodo.zenodo.ZenodoClient.session] ourselves?
+
+    This governs whether
+    [`close`][openscm_zenodo.zenodo.ZenodoClient.close] closes it.
+    Closing a session we were handed is a bug, not a courtesy.
+    """
+
+    def __attrs_post_init__(self) -> None:
+        """
+        Finish initialisation
+
+        We resolve the token and build a session, if we were not given one.
+        """
+        self.token = resolve_token(self.token, zenodo_domain=self.zenodo_domain)
+
+        if self.session is None:
+            self.session = build_session()
+            self._owns_session = True
+
+    def __enter__(self) -> ZenodoClient:
+        """
+        Enter a context block
+
+        Returns
+        -------
+        :
+            The client itself
+        """
+        return self
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
+        """
+        Exit a context block, closing the session if we own it
+        """
+        self.close()
+
+    @property
+    def zenodo_domain_url(self) -> str:
+        """
+        The URL of the Zenodo domain we are interacting with
+
+        Returns
+        -------
+        :
+            URL of the Zenodo domain we are interacting with
+        """
+        return get_zenodo_domain_url(self.zenodo_domain)
+
+    def close(self) -> None:
+        """
+        Close the session, if we built it
+
+        A session that was supplied by the caller is left alone,
+        because its lifecycle belongs to whoever created it.
+        """
+        if self._owns_session and self.session is not None:
+            self.session.close()
+
+    def _get_url(self, path: str) -> str:
+        """
+        Get the URL to hit
+
+        Parameters
+        ----------
+        path
+            The post-domain part of the URL to hit,
+            for example "/api/records/1858949".
+
+            A full URL is returned unaltered,
+            so links from Zenodo's responses can be passed straight in.
+
+        Returns
+        -------
+        :
+            URL to hit
+        """
+        if path.startswith(("http://", "https://")):
+            return path
+
+        return f"{self.zenodo_domain_url}{path}"
+
+    def _handle_error_response(
+        self, response: requests.models.Response, *, description: str
+    ) -> NoReturn:
+        """
+        Raise the most helpful error we can for an unsuccessful response
+
+        Parameters
+        ----------
+        response
+            The unsuccessful response
+
+        description
+            Description of the interaction, used in
+            [`MissingTokenError`][openscm_zenodo.exceptions.MissingTokenError]
+
+        Raises
+        ------
+        MissingTokenError
+            Zenodo refused the request and we have no token to authenticate with
+
+        ZenodoHTTPError
+            Any other unsuccessful response
+        """
+        error = ZenodoHTTPError(response, token=self.token)
+        logger.error(str(error))
+
+        unauthorised = (401, 403)
+        if response.status_code in unauthorised and not self.token:
+            raise MissingTokenError(
+                description, zenodo_domain=self.zenodo_domain_url
+            ) from error
+
+        raise error
+
+    def _request(  # noqa: PLR0913
+        self,
+        path: str,
+        *,
+        method: str = "GET",
+        requires_auth: bool = False,
+        description: str | None = None,
+        timeout: int | None = None,
+        headers: Mapping[str, str] | None = None,
+        **kwargs: Any,
+    ) -> requests.models.Response:
+        """
+        Make a request to Zenodo
+
+        Parameters
+        ----------
+        path
+            The post-domain part of the URL to hit, or a full URL.
+
+            See [`_get_url`][openscm_zenodo.zenodo.ZenodoClient._get_url].
+
+        method
+            HTTP method to use
+
+        requires_auth
+            Does this interaction require a token?
+
+            If `True` and no token was resolved,
+            we raise before the request goes out.
+
+        description
+            Description of the interaction, used in error messages.
+
+            If not supplied, we build one from `method` and the URL.
+
+        timeout
+            Timeout to apply to this request.
+
+            If not supplied, we use
+            [`timeout`][openscm_zenodo.zenodo.ZenodoClient.timeout].
+            Uploads and downloads pass
+            [`timeout_upload`][openscm_zenodo.zenodo.ZenodoClient.timeout_upload].
+
+        headers
+            Headers to send with the request.
+
+            The `Authorization` header is added by us, per request,
+            so it does not need to be included here.
+
+        **kwargs
+            Passed to
+            [`requests.Session.request`][requests.sessions.Session.request]
+
+        Returns
+        -------
+        :
+            The response from Zenodo
+
+        Raises
+        ------
+        MissingTokenError
+            A token is required, but none could be resolved
+
+        ZenodoHTTPError
+            Zenodo returned an unsuccessful status code
+        """
+        url = self._get_url(path)
+        if description is None:
+            description = f"send a {method} request to {url}"
+
+        request_headers = dict(headers) if headers is not None else {}
+        if self.token:
+            request_headers["Authorization"] = f"Bearer {self.token}"
+
+        elif requires_auth:
+            raise MissingTokenError(description, zenodo_domain=self.zenodo_domain_url)
+
+        if self.session is None:
+            msg = (
+                "`session` is `None`. "
+                "It is set during initialisation, "
+                "so this can only happen if it was removed afterwards. "
+                "Assign a `requests.Session` to `session`, "
+                "or create a new client."
+            )
+
+            raise ZenodoError(msg)
+
+        # Mask just in case the token ended up in the URL by accident
+        logger.debug(f"Sending {method} request to {mask_token(url, token=self.token)}")
+
+        response = self.session.request(
+            method,
+            url,
+            headers=request_headers,
+            timeout=self.timeout if timeout is None else timeout,
+            **kwargs,
+        )
+
+        if not response.ok:
+            self._handle_error_response(response, description=description)
+
+        return response
+
 
 @define
 class ZenodoInteractor:
@@ -76,10 +728,10 @@ class ZenodoInteractor:
     Class for interacting with Zenodo
     """
 
-    token: Optional[str] = field(default=None, repr=lambda value: "***")
+    token: str | None = field(default=None, repr=lambda value: "***")
     """Token to use for authenticating interactions with the Zenodo domain"""
 
-    zenodo_domain: Union[str, ZenodoDomain] = ZenodoDomain.production
+    zenodo_domain: str | ZenodoDomain = ZenodoDomain.production
     """Zenodo domain to interact with"""
 
     timeout: int = 10
@@ -446,7 +1098,7 @@ class ZenodoInteractor:
         self,
         post_domain_part: str,
         rest_action: RestAction = RestAction.get,
-        params: Union[dict[str, str], None] = None,
+        params: dict[str, str] | None = None,
         **kwargs: Any,
     ) -> requests.models.Response:
         """
@@ -712,7 +1364,7 @@ class ZenodoInteractor:
         self,
         to_upload: Path,
         bucket_url: str,
-        tqdm_kwargs: Optional[dict[str, Any]] = None,
+        tqdm_kwargs: dict[str, Any] | None = None,
     ) -> requests.models.Response:
         """
         Upload a file to a bucket URL
@@ -774,7 +1426,7 @@ class ZenodoInteractor:
         self,
         deposition_id: str,
         to_upload: Collection[Path],
-        tqdm_kwargs: Optional[dict[str, Any]] = None,
+        tqdm_kwargs: dict[str, Any] | None = None,
         n_threads: int = 4,
     ) -> tuple[requests.models.Response, ...]:
         """
@@ -880,7 +1532,7 @@ class ZenodoInteractor:
 
 def retrieve_metadata(
     deposition_id: str,
-    zenodo_interactor: Optional[ZenodoInteractor] = None,
+    zenodo_interactor: ZenodoInteractor | None = None,
 ) -> dict[str, dict[str, str]]:
     r"""
     Retrieve metadata associated with a given deposition ID
@@ -967,7 +1619,7 @@ def retrieve_metadata(
 
 def retrieve_bibtex_entry(
     deposition_id: str,
-    zenodo_interactor: Optional[ZenodoInteractor] = None,
+    zenodo_interactor: ZenodoInteractor | None = None,
 ) -> str:
     r"""
     Retrieve the bibtext entry associated with a given deposition ID
@@ -1017,9 +1669,9 @@ def retrieve_bibtex_entry(
 def create_new_version(  # noqa: PLR0913
     any_deposition_id: str,
     zenodo_interactor: ZenodoInteractor,
-    metadata: Optional[MetadataType] = None,
+    metadata: MetadataType | None = None,
     publish: bool = False,
-    files_to_upload: Optional[list[Path]] = None,
+    files_to_upload: list[Path] | None = None,
     n_threads: int = 4,
 ) -> str:
     """

@@ -23,6 +23,8 @@ mdurl==0.1.2
     # via markdown-it-py
 pygments==2.19.2
     # via rich
+python-dotenv==1.2.2
+    # via openscm-zenodo
 requests==2.32.4
     # via openscm-zenodo
 rich==14.1.0
@@ -36,6 +38,8 @@ typer==0.16.0
 typing-extensions==4.14.1
     # via typer
 urllib3==2.5.0
-    # via requests
+    # via
+    #   openscm-zenodo
+    #   requests
 win32-setctime==1.2.0 ; sys_platform == 'win32'
     # via loguru

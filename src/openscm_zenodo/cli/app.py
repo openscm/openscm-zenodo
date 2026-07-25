@@ -7,7 +7,7 @@ CLI app
 
 import json
 from pathlib import Path
-from typing import Annotated, TypeAlias, Union
+from typing import Annotated, TypeAlias
 
 import typer
 from loguru import logger
@@ -19,6 +19,8 @@ from openscm_zenodo.zenodo import (
     ZenodoInteractor,
     create_new_version,
     get_reserved_doi,
+    load_env_file,
+    resolve_token,
 )
 
 app = typer.Typer()
@@ -68,11 +70,15 @@ N_THREADS_TYPE: TypeAlias = Annotated[
 ]
 
 TOKEN_TYPE: TypeAlias = Annotated[
-    Union[str, None],
+    str | None,
     typer.Option(
-        envvar="ZENODO_TOKEN",
         help=(
             "Zenodo token to use for this interaction. "
+            "If not supplied, we use, in order of preference: "
+            "the `ZENODO_SANDBOX_TOKEN` environment variable "
+            "(only when using the sandbox domain), "
+            "then the `ZENODO_TOKEN` environment variable, "
+            "then any value found in a `.env` file (see `--env-file`). "
             "For more information about generating tokens, "
             "see the 'Creating a personal access token' header of "
             "https://developers.zenodo.org/#authentication."
@@ -132,6 +138,19 @@ This will be loaded with [loguru-config](https://github.com/erezinman/loguru-con
 If supplied, this overrides any value provided with `--log-level`."""
         ),
     ] = None,
+    env_file: Annotated[
+        Path | None,
+        typer.Option(
+            exists=True,
+            dir_okay=False,
+            readable=True,
+            help="""Path to a `.env` file from which to load environment variables.
+
+If not supplied, we look for a `.env` file
+in the current working directory and its parents.
+Variables which are already set in the environment are not overridden.""",
+        ),
+    ] = None,
 ) -> None:
     """
     Entrypoint for the command-line interface
@@ -143,6 +162,8 @@ If supplied, this overrides any value provided with `--log-level`."""
         setup_logging(
             enable=True, logging_config=logging_config, logging_level=logging_level
         )
+
+    load_env_file(env_file)
 
 
 @app.command(name="retrieve-metadata")
@@ -167,7 +188,7 @@ as the starting point for the next version of a deposit."""
     Retrieve metadata
     """
     zenodo_interactor = ZenodoInteractor(
-        token=token,
+        token=resolve_token(token, zenodo_domain=zenodo_domain),
         zenodo_domain=zenodo_domain,
     )
 
@@ -188,7 +209,7 @@ def retrieve_bibtex_command(
     Retrieve bibtex entry
     """
     zenodo_interactor = ZenodoInteractor(
-        token=token,
+        token=resolve_token(token, zenodo_domain=zenodo_domain),
         zenodo_domain=zenodo_domain,
     )
 
@@ -201,7 +222,7 @@ def retrieve_bibtex_command(
 def update_metadata_command(
     deposition_id: DEPOSITION_ID_TYPE,
     metadata_file: METADATA_FILE_TYPE,
-    token: TOKEN_TYPE,
+    token: TOKEN_TYPE = None,
     zenodo_domain: ZENODO_DOMAIN_TYPE = ZenodoDomain.production,
     reserve_doi: Annotated[
         bool,
@@ -241,7 +262,12 @@ def update_metadata_command(
         metadata["metadata"]["prereserve_doi"] = True
 
     zenodo_interactor = ZenodoInteractor(
-        token=token,
+        token=resolve_token(
+            token,
+            zenodo_domain=zenodo_domain,
+            required=True,
+            description="update metadata",
+        ),
         zenodo_domain=zenodo_domain,
     )
 
@@ -257,7 +283,7 @@ def update_metadata_command(
 def upload_files_command(
     deposition_id: DEPOSITION_ID_TYPE,
     files_to_upload: FILES_TO_UPLOAD_TYPE,
-    token: TOKEN_TYPE,
+    token: TOKEN_TYPE = None,
     zenodo_domain: ZENODO_DOMAIN_TYPE = ZenodoDomain.production,
     n_threads: N_THREADS_TYPE = 4,
 ) -> None:
@@ -269,7 +295,12 @@ def upload_files_command(
         raise ValueError(msg)
 
     zenodo_interactor = ZenodoInteractor(
-        token=token,
+        token=resolve_token(
+            token,
+            zenodo_domain=zenodo_domain,
+            required=True,
+            description="upload files",
+        ),
         zenodo_domain=zenodo_domain,
     )
 
@@ -281,7 +312,7 @@ def upload_files_command(
 @app.command(name="remove-files")
 def remove_files_command(
     deposition_id: DEPOSITION_ID_TYPE,
-    token: TOKEN_TYPE,
+    token: TOKEN_TYPE = None,
     files_to_remove: Annotated[
         list[Path] | None,
         typer.Argument(help="Files to remove from the Zenodo deposition"),
@@ -295,7 +326,12 @@ def remove_files_command(
     Remove files from a Zenodo deposition
     """
     zenodo_interactor = ZenodoInteractor(
-        token=token,
+        token=resolve_token(
+            token,
+            zenodo_domain=zenodo_domain,
+            required=True,
+            description="remove files",
+        ),
         zenodo_domain=zenodo_domain,
     )
 
@@ -333,7 +369,7 @@ def create_new_version_command(  # noqa: PLR0913
             )
         ),
     ],
-    token: TOKEN_TYPE,
+    token: TOKEN_TYPE = None,
     metadata_file: METADATA_FILE_TYPE = None,
     publish: Annotated[
         bool,
@@ -360,7 +396,12 @@ def create_new_version_command(  # noqa: PLR0913
         metadata = None
 
     zenodo_interactor = ZenodoInteractor(
-        token=token,
+        token=resolve_token(
+            token,
+            zenodo_domain=zenodo_domain,
+            required=True,
+            description="create a new version",
+        ),
         zenodo_domain=zenodo_domain,
     )
 

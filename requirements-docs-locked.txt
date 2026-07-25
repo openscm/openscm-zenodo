@@ -316,6 +316,8 @@ python-dateutil==2.9.0.post0
     #   arrow
     #   ghp-import
     #   jupyter-client
+python-dotenv==1.2.2
+    # via openscm-zenodo
 python-json-logger==3.3.0
     # via jupyter-events
 pywin32==311 ; platform_python_implementation != 'PyPy' and sys_platform == 'win32'
@@ -436,7 +438,9 @@ typing-extensions==4.14.1
 uri-template==1.3.0
     # via jsonschema
 urllib3==2.5.0
-    # via requests
+    # via
+    #   openscm-zenodo
+    #   requests
 watchdog==6.0.0
     # via
     #   mkdocs

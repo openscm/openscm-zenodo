@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
-from typing import TYPE_CHECKING, Optional, TypedDict, Union
+from typing import TYPE_CHECKING, TypedDict
 
 from loguru import logger
 
@@ -61,8 +61,8 @@ def get_default_config(
 
 def setup_logging(
     enable: bool,
-    logging_config: Optional[Union[Path, ConfigLike]] = None,
-    logging_level: Optional[str] = None,
+    logging_config: Path | ConfigLike | None = None,
+    logging_level: str | None = None,
 ) -> None:
     """
     Set up logging
@@ -108,7 +108,7 @@ def setup_logging(
     else:
         # Type ignore while we wait for new release of loguru-config
         try:
-            from loguru_config import LoguruConfig  # type: ignore
+            from loguru_config import LoguruConfig  # type: ignore # noqa: PLC0415
         except ImportError:
             msg = (
                 "[loguru-config](https://github.com/erezinman/loguru-config) "
@@ -130,7 +130,7 @@ def setup_logging(
         logger.warning("`logging_level` is ignored if `logging_config` is supplied")
 
 
-def mask_token(input: str, token: Union[str, None]) -> str:
+def mask_token(input: str, token: str | None) -> str:
     """
     Mask any token values in `input`
 

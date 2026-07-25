@@ -90,7 +90,24 @@ Names change to match: a **record** is identified by a `record_id`; the editable
 object is its **draft**; a **new version** is a fresh draft with a new id.
 "Deposition" terminology is retired.
 
-### 1.1 The client
+### 1.1 The client — ✅ IMPLEMENTED
+
+**Done** (sequencing step 1): `ZenodoClient`, `build_session`, `resolve_token`,
+`load_env_file`, `RecordID` / `ParentID`, `_request`, and
+`openscm_zenodo/exceptions.py` all exist, with unit tests. Deltas from the text
+below, all deliberate:
+
+- `mask_token` is a two-argument function (`mask_token(input, token)`), so it
+  cannot be an attrs field `repr`. The field uses a small `_repr_token` instead;
+  `mask_token` is still used for URLs in log and error messages.
+- `get_zenodo_domain_url(zenodo_domain)` was added — the domain arrives as either
+  a `str` or a `ZenodoDomain`, and three places need it as a URL.
+- `resolve_token` takes `required: bool = False` rather than there being a second
+  `require_token` function; `required=True` raises `MissingTokenError` instead of
+  returning `None`, and `@overload` keeps the return type precise in both cases.
+  It is what the CLI's write commands use.
+- `ZenodoInteractor` is still present and still works. It is deleted as Parts 2–8
+  replace its methods, so the branch stays green in between.
 
 Rename `ZenodoInteractor` → **`ZenodoClient`**.
 
@@ -1360,10 +1377,11 @@ On top of per-endpoint coverage:
    `include_cli: true`, fix `project_description_short`, then re-lock and run
    `make check`. Own commit, before any library work.~~ ✅ **DONE** (commit
    `72c0ecc`, template now `v0.15.4`).
-1. **Client + transport foundation** — new `ZenodoClient` skeleton, injectable
+1. ~~**Client + transport foundation** — new `ZenodoClient` skeleton, injectable
    session + public `build_session`, `urllib3.Retry` adapter, `_request`,
    exceptions module, Bearer auth, `resolve_token` precedence chain and the
-   `RecordID`/`ParentID` `NewType`s (Part 1.1).
+   `RecordID`/`ParentID` `NewType`s (Part 1.1).~~ ✅ **DONE** — see the note at
+   the top of 1.1.
 2. **Read paths** — `get_record`, `get_draft`, `get_metadata`, `get_citation`
    (Part 10), `list_files`. Cheap, and they exercise the transport.
 3. **Metadata (Part 6)** — schema rewrite + `load_metadata` + validation. Biggest

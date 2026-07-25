@@ -11,9 +11,11 @@ requires-python = ">=3.10"
 dependencies = [
     "attrs>=22.0",
     "loguru>=0.5",
+    "python-dotenv>=1",
     "requests>=2.26",
     "tqdm>=4.50",
     "typer>=0.10",
+    "urllib3>=1.26",
 ]
 readme = "README.md"
 classifiers = [
@@ -62,6 +64,7 @@ dev = [
     "tomli==2.2.1 ; python_full_version < '3.11'",
     "tomli-w==1.2.0",
     "towncrier==24.8.0",
+    "ty>=0.0.63",
 ]
 docs = [
     # Key dependencies
@@ -189,7 +192,6 @@ unfixable = [
 ignore = [
     "D200",
     "D400",
-    "UP007",
 ]
 
 [tool.ruff.lint.per-file-ignores]

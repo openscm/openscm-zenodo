@@ -6,11 +6,13 @@ See https://docs.pytest.org/en/7.1.x/reference/fixtures.html#conftest-py-sharing
 
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 import pytest
+import requests
 
 if TYPE_CHECKING:
     import _pytest
@@ -33,3 +35,81 @@ def pytest_runtest_setup(item: _pytest.python.Function) -> None:
     for mark in item.iter_markers():
         if mark.name == "zenodo_token" and not ZENODO_TOKEN_AVAILABLE:
             pytest.skip("`ZENODO_TOKEN` environment variable not set")
+
+
+def build_response(
+    status_code=200,
+    json_body=None,
+    text=None,
+    url="https://zenodo.org/api/records/1234",
+    method="GET",
+):
+    """
+    Build a response, as if it had come back from Zenodo
+    """
+    response = requests.models.Response()
+    response.status_code = status_code
+    response.url = url
+    response.reason = "Made up"
+    response.request = requests.models.Request(method=method, url=url).prepare()
+
+    if json_body is not None:
+        response._content = json.dumps(json_body).encode()
+        response.headers["Content-Type"] = "application/json"
+
+    elif text is not None:
+        response._content = text.encode()
+
+    else:
+        response._content = b""
+
+    return response
+
+
+class RecordingSession(requests.Session):
+    """
+    Session which records the requests it is given and returns canned responses
+
+    This lets us check what we sent to Zenodo without sending anything.
+    """
+
+    def __init__(self, responses=None):
+        super().__init__()
+        self.calls = []
+        self.responses = list(responses) if responses is not None else []
+
+    def request(self, method, url, **kwargs):
+        """
+        Record a request and return the next canned response
+        """
+        self.calls.append({"method": method, "url": url, **kwargs})
+
+        if self.responses:
+            return self.responses.pop(0)
+
+        return build_response(url=url, method=method)
+
+
+@pytest.fixture
+def make_response():
+    """
+    Get a factory for responses, as if they had come back from Zenodo
+    """
+    return build_response
+
+
+@pytest.fixture
+def make_recording_session():
+    """
+    Get a factory for sessions which record requests and return canned responses
+    """
+    return RecordingSession
+
+
+@pytest.fixture
+def no_token_in_env(monkeypatch):
+    """
+    Make sure no ambient token leaks into a test
+    """
+    monkeypatch.delenv("ZENODO_TOKEN", raising=False)
+    monkeypatch.delenv("ZENODO_SANDBOX_TOKEN", raising=False)
