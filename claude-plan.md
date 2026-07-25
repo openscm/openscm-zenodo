@@ -97,45 +97,224 @@ Rename `ZenodoInteractor` → **`ZenodoClient`**.
 ```python
 @define
 class ZenodoClient:
-    token: Optional[str] = field(
-        factory=lambda: os.environ.get("ZENODO_TOKEN"),
-        repr=lambda v: "***",
-    )
-    zenodo_domain: Union[str, ZenodoDomain] = ZenodoDomain.production
+    token: str | None = field(default=None, repr=mask_token)
+    """Token to authenticate with. `None` means "resolve it" — see 1.1.1."""
+
+    zenodo_domain: str | ZenodoDomain = ZenodoDomain.production
     timeout: int = 10
     timeout_upload: int = 60 * 60
 
-    # robustness config (Part 2)
-    max_retries: int = 5
-    backoff_factor: float = 1.0
-    retry_status_forcelist: tuple[int, ...] = (429, 500, 502, 503, 504)
+    session: requests.Session | None = field(default=None, repr=_repr_session)
+    """Caller-supplied session (dependency injection). `None` → we build one."""
 
-    # lazily-built requests.Session with the retry adapter mounted
-    _session: requests.Session = field(init=False, factory=_build_session)
+    _owns_session: bool = field(init=False, default=False)
+    """Did we build `session` ourselves? Governs whether `close()` closes it."""
+
+    def __attrs_post_init__(self) -> None:
+        self.token = resolve_token(self.token, zenodo_domain=self.zenodo_domain)
+        if self.session is None:
+            self.session = build_session()
+            self._owns_session = True
 ```
 
+Note what is **not** on the client: `max_retries`, `backoff_factor` and
+`retry_status_forcelist` are gone. They were session configuration wearing a
+client costume — the only thing the client ever did with them was forward them to
+`build_session`. They now live as defaults on `build_session` (1.1.3), and a
+caller who wants different values builds a session and injects it. That is one
+concept in one place instead of five parameters duplicated across two APIs, and
+it removes the trap where those fields look live but are silently ignored once a
+session is injected.
+
+`timeout` / `timeout_upload` stay on the client: they are per-request arguments
+passed to each call, not session state.
+
+**`session` is in the `repr`** — with a custom formatter, which is the only
+reason it looked excluded in the earlier draft. The default
+`<requests.sessions.Session object at 0x10f3c2d50>` is both noise and a memory
+address, and this repo runs `pytest --doctest-modules` in CI
+(`.github/workflows/ci.yaml:127`), so a raw address in a client `repr` would make
+any doctest that echoes a `ZenodoClient` unrunnable. So:
+
+```python
+def _repr_session(session: requests.Session | None) -> str:
+    return "None" if session is None else f"<{type(session).__qualname__}>"
+```
+
+That keeps the field visible and deterministic. `_owns_session` is in the `repr`
+too, and it is the genuinely informative bit — "am I looking at a client with the
+default transport, or one someone handed a session to?" is exactly the question
+you ask when debugging from a traceback.
+
 Authentication moves to the `Authorization: Bearer <token>` header (InvenioRDM's
-preferred scheme) instead of the `?access_token=` query param. Token defaults
-from `ZENODO_TOKEN`.
+preferred scheme) instead of the `?access_token=` query param.
+
+#### 1.1.1 Token resolution
+
+One function owns the precedence, so the library, the CLI and the tests cannot
+disagree about where a token came from:
+
+```python
+def resolve_token(
+    token: str | None = None,
+    *,
+    zenodo_domain: str | ZenodoDomain = ZenodoDomain.production,
+    env: Mapping[str, str] | None = None,   # defaults to os.environ; injectable for tests
+) -> str | None:
+```
+
+**Order of precedence, highest first:**
+
+1. **Explicit argument** — `ZenodoClient(token=...)` or `resolve_token("...")`.
+   Nothing overrides an explicitly-passed token.
+2. **CLI `--token`** — which is not a separate mechanism at all: the CLI simply
+   passes its value through as (1). This is what makes the hierarchy
+   "normal" — the CLI is just another caller.
+3. **`ZENODO_SANDBOX_TOKEN`**, *only* when `zenodo_domain` is the sandbox.
+   Sandbox and production tokens are **not interchangeable** — a production
+   token against `sandbox.zenodo.org` fails, and vice versa — so keeping both
+   exported at once is the normal state for anyone who develops against sandbox
+   and releases to production. Today CI works around this by piping
+   `secrets.ZENODO_SANDBOX_TOKEN` into `ZENODO_TOKEN`
+   (`.github/workflows/ci.yaml:63`); this makes that a first-class rule instead
+   of a shell trick.
+4. **`ZENODO_TOKEN`** in the process environment — the documented default, and
+   the fallback for sandbox too if `ZENODO_SANDBOX_TOKEN` is unset.
+5. **`.env` file** — see 1.1.2. Loaded into the environment before (3)/(4) are
+   read, and never overriding a variable that is already set, so a real env var
+   always beats a file on disk.
+
+If nothing resolves, `resolve_token` returns `None` rather than raising —
+unauthenticated reads of public records are a supported use (Part 5). The error
+is raised **at the point of use**:
+
+- write methods pass `requires_auth=True` to `_request`, which raises
+  `MissingTokenError` *before* the request goes out;
+- read methods let the server answer, and `_request` turns a `401`/`403` with no
+  token resolved into a `MissingTokenError` whose message names the precedence
+  chain above, instead of a bare `ZenodoHTTPError`.
+
+`mask_token` (already in the codebase) stays the `repr` for the field, so a
+client in a traceback never leaks the token.
+
+#### 1.1.2 `.env` support — yes, but only in the CLI
+
+**Recommendation: adopt it, and keep it out of the library's import path.**
+
+It is worth doing: `make test-integration` already reads the token from a local
+`.env` (Part 12.4), `.env` is already in `.gitignore:132`, and `python-dotenv` is
+a small, dependency-free, BSD-3 package (so it clears `liccheck`). The thing to
+avoid is the version that *does* complicate things for no reason — a library that
+mutates `os.environ` as an import side effect, which surprises anyone embedding
+`ZenodoClient` in a larger app and makes test isolation harder.
+
+So:
+
+- **CLI**: loads `.env` in the `@app.callback()` body, before any command body
+  constructs a client:
+  ```python
+  load_dotenv(env_file or find_dotenv(usecwd=True), override=False)
+  ```
+  `override=False` is what gives us rule (5) < rules (3)/(4) for free. New global
+  options: `--env-file PATH` (explicit; error if missing) and `--no-env-file`
+  (skip discovery entirely).
+- **Library**: never loads anything implicitly. Document the one-liner
+  (`from dotenv import load_dotenv; load_dotenv()`) in the how-to guide for
+  people who want it in a script or notebook.
+
+One wrinkle this forces, and it is an improvement anyway: **drop typer's
+`envvar="ZENODO_TOKEN"`** (`cli/app.py:73`). Typer resolves `envvar` at parse
+time, *before* the callback body runs, so it would read the environment before
+`.env` was loaded and silently ignore the file. Removing it puts the entire
+precedence chain in `resolve_token` — a single, unit-testable place — with the
+CLI contributing only rule (2). Cost: `--help` no longer auto-prints
+`[env var: ZENODO_TOKEN]`, so the option's help text spells out the full order
+explicitly (better documentation than the generated line anyway).
+
+#### 1.1.3 Session injection
+
+`session` is a constructor argument, so callers can supply their own configured
+`requests.Session` (custom adapters, proxies, corporate CA bundle, `VCR`/
+`responses` in tests, a shared connection pool across clients). We only build one
+when none is given, via a **public** factory that carries all the transport
+defaults:
+
+```python
+def build_session(
+    *,
+    max_retries: int = 5,
+    backoff_factor: float = 1.0,
+    retry_status_forcelist: tuple[int, ...] = (429, 500, 502, 503, 504),
+) -> requests.Session:
+    """Session with the urllib3 Retry adapter mounted (Part 2)."""
+```
+
+This is the **only** place retry policy is expressed. Want a longer backoff, or
+to retry a status we don't list? Build the session yourself and inject it:
+
+```python
+client = ZenodoClient(session=build_session(max_retries=10, backoff_factor=2.0))
+```
+
+Rules that keep injection honest:
+
+- **We never mutate an injected session.** In particular the `Authorization`
+  header is applied **per request** in `_request`, not written onto
+  `session.headers`. Nice side effect: when no token resolves we send no
+  `Authorization` header at all, so an injected session that carries its own
+  auth keeps working.
+- **Retry policy travels with the session**, so injecting one means the caller
+  owns it — there is no client-level knob left to be confusingly ignored.
+- **Lifecycle:** `close()` and `__enter__`/`__exit__` close the session **only if
+  `_owns_session`**. Closing a session we were handed is a bug, not a courtesy.
+- The `tenacity` upload retry and checksum verification (Part 2) sit above the
+  session, so they still apply to injected sessions.
+
+#### 1.1.4 Identifier types — `RecordID` as a `NewType`, not a class
+
+**Recommendation: `NewType`, not an object.** The confusion worth defending
+against is not "is this a string?", it is **"is this a record id or a parent
+(concept) id?"** — two numeric strings that are silently accepted by every
+endpoint and produce wrong-but-successful results.
+
+```python
+RecordID = NewType("RecordID", str)   # one version of a record
+ParentID = NewType("ParentID", str)   # the all-versions "concept" id
+```
+
+- Methods **return** `RecordID` / `ParentID` (`create_record`, `new_version`,
+  `get_latest_version_id`, `get_parent_id`, `create_new_version`).
+- Methods **accept** `str | RecordID`, so `client.get_record("15187976")` and
+  ids read from JSON/argv still work with no wrapping ceremony.
+- Zero runtime cost, checked by the `mypy` + `ty` already configured in the
+  template, and it documents the method map far better than nine bare `str`s.
+
+A full `@define class RecordID` was considered and rejected: it only earns its
+keep if it carries behaviour (`.url`, `.doi`, `.parent`), and that behaviour
+needs the client's domain, which drags the client into an identifier object. It
+would also force `str()`/converter handling at every CLI, JSON and f-string
+boundary for little benefit. If URL/DOI helpers are wanted later, add free
+functions — `record_url(record_id, zenodo_domain)` — rather than a class.
 
 ### 1.2 Method map (old → new)
 
 | Old (`ZenodoInteractor`) | New (`ZenodoClient`) | Notes |
 |---|---|---|
 | `get_record` | `get_record(record_id)` | `GET /api/records/{id}` |
-| `get_deposition` | `get_draft(record_id)` | `GET /api/records/{id}/draft` |
-| — | `create_record(metadata)` → `record_id` | `POST /api/records` (brand-new draft) |
-| `create_new_version_from_latest` / `get_draft_deposition_id` | `new_version(record_id, *, import_files=False)` → `record_id` | `POST /api/records/{id}/versions` (empty by default) |
+| `get_deposition` | `get_draft(record_id)` | `GET /api/records/{id}/draft` — read only, `404` if none |
+| — | `create_record(metadata)` → `RecordID` | `POST /api/records` (brand-new record + its draft) |
+| — | `get_or_create_draft(record_id)` → `RecordID` | `POST /api/records/{id}/draft` — the draft of a published record (see 1.2.1) |
+| `create_new_version_from_latest` / `get_draft_deposition_id` | `new_version(record_id, *, import_files=False)` → `RecordID` | `POST /api/records/{id}/versions` (empty by default) — also get-or-create (1.2.1) |
 | — | `import_files(record_id)` | `POST .../draft/actions/files-import` |
-| `get_latest_deposition_id` | `get_latest_version_id(record_id)` | via `versions` / `links.latest` |
-| `get_concept_id` | `get_parent_id(record_id)` | InvenioRDM "parent" id (all-versions id) |
+| `get_latest_deposition_id` | `get_latest_version_id(record_id)` → `RecordID` | via `versions` / `links.latest` |
+| `get_concept_id` | `get_parent_id(record_id)` → `ParentID` | InvenioRDM "parent" id (all-versions id) |
 | `update_metadata` | `update_metadata(record_id, metadata)` | `PUT /api/records/{id}/draft` |
 | `get_metadata` | `get_metadata(record_id, *, user_controlled_only=False)` | new schema (Part 6) |
 | `publish` | `publish(record_id)` | `POST .../draft/actions/publish` |
 | `upload_file_to_bucket_url` | `upload_file(record_id, path, *, verify_checksum=True)` | init→content→commit (Part 2) |
-| `upload_files` | `upload_files(record_id, paths, *, n_threads=4, verify_checksum=True)` | warns on stripped paths (Part 11) |
+| `upload_files` | `upload_files(record_id, paths, *, n_threads=4, verify_checksum=True)` | **additive**; skips files already on the draft with a matching MD5; warns on stripped paths (Part 11) |
 | — | `upload_files_as_zip(record_id, paths_or_groups, ...)` | zip to preserve structure (Part 11) |
-| — | `sync_files(record_id, paths, *, delete_extraneous=False, n_threads=4)` | Part 3 |
+| — | `mirror_files(record_id, paths, *, n_threads=4, verify_checksum=True)` | **destructive**: draft ends up exactly `paths` (Part 3) |
 | `remove_files` | `delete_files(record_id, filenames)` | delete by **name** |
 | `remove_all_files` | `delete_all_files(record_id)` | |
 | `remove_file_id` / `remove_files_by_id` | removed | no numeric file ids in the new API |
@@ -146,6 +325,51 @@ from `ZENODO_TOKEN`.
 | — | `download_files(record_id, dest_dir, *, filenames=None, draft=False, ...)` → `list[Path]` | Part 5 |
 | — | `reserve_doi(record_id)` → `str` | `POST .../draft/pids/doi` (Part 7) |
 | `get_response` | `_request(...)` (private) | routes through the session |
+
+#### 1.2.1 Can a record have more than one draft? No — and the server enforces it
+
+Checked against InvenioRDM's `invenio-drafts-resources` service layer (the code
+behind both endpoints):
+
+- **`edit` (`POST /api/records/{id}/draft`)** — *"Draft exists - return it"*: it
+  resolves the existing draft, checks permission and returns it, only creating
+  one from the published record when none is found. (`edit` is the *upstream*
+  service method's name; ours is `get_or_create_draft`, below.)
+- **`new_version` (`POST /api/records/{id}/versions`)** — *"Draft for new version
+  already exists? if so return it"*: it checks `record.versions.next_draft_id`
+  and returns that draft rather than creating a sibling.
+
+So a record version has **at most one draft**, and a record chain has **at most
+one unpublished next version**. Both endpoints are already get-or-create; there
+is no "create a second draft" operation to guard against.
+
+What that means for the API:
+
+- **`create_record` does not need an "ensure" mode.** It takes no `record_id` —
+  there is no existing draft it could return, and every call is deliberately a
+  brand-new record. Adding an ensure-flag there would be guessing which record
+  the caller meant. Keep it single-purpose.
+- **The get-or-create case is `get_or_create_draft`**, and the plan was missing
+  it entirely. It is not optional: editing a **published** record requires
+  `POST .../draft` first — `PUT .../draft` on a record with no draft is a `404`.
+  So `update_metadata` (and `upload_files` against a published record) gains a
+  `client.get_or_create_draft(record_id)` call in front of it, or an
+  `ensure_draft: bool = True` parameter that does the same.
+  We deliberately **do not** copy InvenioRDM's name for it (`edit`):
+  `get_or_create_draft` says what it does at the call site, including that it is
+  idempotent and safe to call repeatedly, whereas `client.edit(record_id)` reads
+  like it is about to change something. It also sits next to `get_draft` (the
+  read-only `GET`, which `404`s when there is no draft) in a way that makes the
+  difference between the two obvious in autocomplete.
+- **`new_version` is likewise idempotent**, which is exactly the behaviour a
+  release script wants: re-running after a mid-way failure resumes the same
+  draft instead of littering the record with siblings. Say so in the docstring —
+  callers otherwise assume it always creates.
+
+Caveat: this is upstream InvenioRDM behaviour, and Zenodo runs its own pinned
+build. Part 12 gets an explicit **idempotency test** (call `get_or_create_draft`
+twice and `new_version` twice, assert the same id comes back both times) so a
+divergence shows up as a failing test rather than a surprise in production.
 
 ### 1.3 Module-level helpers
 
@@ -167,18 +391,39 @@ def create_new_version(                                     # high-level conveni
     *,
     metadata=None,
     files=None,
-    files_mode: FilesMode = FilesMode.replace,
+    files_mode: FilesMode = FilesMode.start_fresh,
     publish=False,
     n_threads=4,
-) -> str                                                    # new version's record_id
+) -> RecordID                                               # new version's record id
 def get_reserved_doi(record_response) -> str                # reads pids.doi
 ```
 
+Every helper takes `client=None` and builds a default `ZenodoClient()` when none
+is passed — the same dependency-injection shape as 1.1.3, one level up.
+
 `FilesMode` is the single knob for how a new version treats files (Part 4):
-`replace` (default), `inherit`, `sync`. (We use `inherit` rather than `import`
-because `import` is a reserved keyword — `FilesMode.import` is a syntax error;
-`inherit` reads cleanly and describes carrying the previous version's files
-forward.)
+**`start_fresh`** (default), **`inherit`**, **`mirror`**.
+
+- **`start_fresh` rather than `replace`** — "replace" invites the question
+  *replace what with what?*, and reads as though something is being overwritten
+  in place. Nothing is: the new version's draft simply begins empty and gets
+  exactly the files you pass. `start_fresh` says that.
+- **`inherit` rather than `import`** because `import` is a reserved keyword —
+  `FilesMode.import` is a syntax error; `inherit` reads cleanly and describes
+  carrying the previous version's files forward.
+- **`mirror` rather than `sync`** — this mode *does* delete remote files that are
+  not in the local list, and "sync" is not a reliable signal for that. The
+  convention is split: `rsync` and `aws s3 sync` do **not** delete without
+  `--delete`, while `rclone sync` does. A term that means opposite things in two
+  of the three tools people know is exactly the wrong name for a destructive
+  operation. `mirror` is unambiguous and has precedent for
+  make-the-destination-match-exactly (`robocopy /MIR`, `lftp mirror`,
+  `rsync --delete` is commonly described as mirroring). `exact_match` also works
+  but reads as a comparison, not an action.
+
+The three mode names line up one-for-one with what actually happens to the
+draft's file list — nothing carried over, everything carried over, made to match
+— which is the whole point of the enum.
 
 ---
 
@@ -196,18 +441,17 @@ single bucket `PUT`. The three steps become one `upload_file` method:
 
 Robustness, integrated here and in the client:
 
-- **Shared session + retry adapter.** All requests go through `self._session`
-  with an `HTTPAdapter` mounting `urllib3.util.retry.Retry`
+- **Shared session + retry adapter.** All requests go through `self.session`
+  (Part 1.1.3) with an `HTTPAdapter` mounting `urllib3.util.retry.Retry`
   (`total=max_retries`, `backoff_factor`, `status_forcelist=retry_status_forcelist`,
-  `respect_retry_after_header=True`, all methods). Gives status-based retry and
-  honours Zenodo's `Retry-After` on 429s. Also fixes the "weirdly flaky"
-  parallelism that forced serial file deletes — re-enable `n_threads` there.
+  `respect_retry_after_header=True`, all methods) — configured in `build_session`,
+  not on the client. Gives status-based retry and honours Zenodo's `Retry-After`
+  on 429s. Also fixes the "weirdly flaky" parallelism that forced serial file
+  deletes — re-enable `n_threads` there.
 - **Upload retry.** The content `PUT` streams a consumed, tqdm-wrapped file
   handle that `urllib3` cannot replay, so wrap `upload_file` in a `tenacity`
-  retry that re-opens the file and resets the progress bar per attempt. (We use
-  `tenacity`, not `httpx`: `httpx` is a client swap, not a retry library, and its
-  built-in retry doesn't cover HTTP status codes anyway. `urllib3.Retry` handles
-  ordinary requests; `tenacity` handles the streaming upload's re-open case.)
+  retry that re-opens the file and resets the progress bar per attempt. See
+  2.2 for why `tenacity` and not the alternatives.
 - **Checksum verification.** Compute the local file's MD5 while streaming and
   compare against the checksum in the **commit** response. On mismatch raise
   `ChecksumMismatchError`, which is also in `tenacity`'s retry set so a corrupt
@@ -216,7 +460,7 @@ Robustness, integrated here and in the client:
 - **MD5 timing logs.** MD5 hashing is CPU-bound and, for large files, can be a
   non-trivial share of an upload/download and is easy to mistake for slow I/O.
   So the single shared MD5 helper (`_md5_hex` / the streaming variant, reused by
-  upload here, `sync_files` in Part 3, and download in Part 5) logs its own
+  upload here, `upload_files` / `mirror_files` in Part 3, and download in Part 5) logs its own
   timing, gated behind logging levels so it is silent by default:
   - a `logger.debug` at the **start** — `"Computing MD5 for {path} ({size})"`;
   - a `logger.debug` on **completion** — elapsed seconds and derived MB/s;
@@ -284,6 +528,56 @@ Rules:
   **files-completed** bar (`unit="file"`, `total=len(paths)`). This one also uses
   `leave=False`, so once the whole operation finishes the terminal is left clean.
 
+### 2.2 Why `tenacity` (and not `httpx`, or nothing)
+
+Two different retry problems, and only one of them needs a library:
+
+**Ordinary requests** — metadata `PUT`s, listings, deletes, publishes. Handled by
+`urllib3.util.retry.Retry` mounted in `build_session`. It retries on **status
+codes** (429/5xx), honours `Retry-After`, and does exponential backoff. `urllib3`
+is already a transitive dependency of `requests`, so this costs nothing.
+
+**The streaming upload `PUT`** — the one case `urllib3.Retry` cannot handle. It
+retries by re-sending the *same body object*, and ours is a consumed,
+non-seekable, tqdm-wrapped file handle; replaying it would send zero bytes. The
+fix has to sit **above** the request, where it can re-open the file and reset the
+progress bar. Same for `ChecksumMismatchError`, which is not an HTTP failure at
+all — the request succeeded, the bytes were wrong — so no transport-layer retry
+can see it.
+
+Why not `httpx`:
+
+- **`httpx`'s retry does not do what we need.** `HTTPTransport(retries=N)` retries
+  **connection** errors only (`ConnectError`, `ConnectTimeout`). It explicitly
+  does *not* retry on HTTP status codes — so it would not retry a single one of
+  Zenodo's 429s, which is the failure we actually see. It also would not replay a
+  consumed upload body, so it leaves the hard case untouched too.
+- **It is a client swap, not a retry feature.** Adopting it means rewriting every
+  call site, the streaming upload/download paths, `types-requests` → no stubs
+  needed but new idioms, and dropping a dependency (`requests`) the project
+  already has and pins. That is a large diff to buy a feature that does not
+  cover our case.
+- The one genuine `httpx` advantage — HTTP/2, async — is irrelevant here: this is
+  a synchronous CLI/library and Zenodo does not reward connection multiplexing.
+
+Alternatives to `tenacity` for that thin outer layer, honestly:
+
+- **Hand-rolled loop** — `for attempt in range(n): ... except Retryable: sleep(backoff * 2**attempt + jitter)`.
+  Perfectly viable, ~20 lines, zero new dependencies. The reason not to: we need
+  the same policy in three places (upload content `PUT`, download, checksum
+  mismatch), and hand-rolled jitter/`reraise`/last-exception handling is exactly
+  the code that gets subtly wrong and untested.
+- **`backoff`** — comparable API, notably less active than `tenacity`.
+- **`stamina`** — nicer defaults, but it is a wrapper *over* `tenacity`, so it
+  adds a dependency rather than avoiding one.
+
+**Decision: `tenacity`.** It is the standard, it is small and widely vendored, and
+it gives `retry_if_exception_type` (including our own `ChecksumMismatchError`),
+capped exponential backoff with jitter, and `before_sleep` hooks for logging the
+retry — all of which we would otherwise write ourselves. If dependency count ever
+becomes the binding constraint, the hand-rolled loop is the fallback and the
+blast radius is one decorator.
+
 ### Exceptions
 
 New `openscm_zenodo/exceptions.py`:
@@ -299,34 +593,49 @@ New `openscm_zenodo/exceptions.py`:
 
 ---
 
-## Part 3 — File sync (upload only what changed)
+## Part 3 — Two file-writing methods: `upload_files` and `mirror_files`
 
-Make idempotent, diff-based uploads a first-class operation. `GET
-/api/records/{id}/draft/files` returns each file's `key` (name) and `checksum`,
-so we diff locally with no downloads.
+There is no `sync_files` and no `delete_extraneous` flag. The ambiguity of "sync"
+is not fixed by documenting the flag — it is fixed by never making the caller
+read a flag to find out whether a call deletes their data. **Two methods, one of
+which is destructive and says so in its name:**
 
 ```python
 def list_files(self, record_id: str) -> dict[str, str]:
     """Map of filename -> md5 hex for the draft's current files."""
 
-def sync_files(
-    self,
-    record_id: str,
-    paths: Collection[Path],
-    *,
-    delete_extraneous: bool = False,
-    n_threads: int = 4,
-) -> ...:
-    remote = self.list_files(record_id)                # name -> md5
-    want = {p.name: p for p in paths}
-    to_upload = [p for name, p in want.items() if remote.get(name) != _md5_hex(p)]
-    to_delete = [n for n in remote if n not in want] if delete_extraneous else []
-    # delete_files(to_delete); upload_files(to_upload)
+def upload_files(self, record_id, paths, *, n_threads=4, ...) -> ...:
+    """Add `paths` to the draft. Never deletes anything."""
+
+def mirror_files(self, record_id, paths, *, n_threads=4, ...) -> ...:
+    """Make the draft's files exactly `paths`. Deletes anything else."""
 ```
 
-Behaviour: skip files whose name+MD5 already match (cheap re-runs), upload only
-new/changed files, optionally delete remote files not in the local set so the
-draft ends up exactly matching `paths`. Reuses the Part-2 streaming MD5 helper.
+`GET /api/records/{id}/draft/files` returns each file's `key` (name) and
+`checksum`, so both methods diff locally with no downloads, reusing the Part-2
+streaming MD5 helper:
+
+```python
+remote = self.list_files(record_id)                 # name -> md5
+want = {p.name: p for p in paths}
+to_upload = [p for name, p in want.items() if remote.get(name) != _md5_hex(p)]
+to_delete = [n for n in remote if n not in want]    # mirror_files only
+```
+
+- **`upload_files`** does the `to_upload` half. Skipping files whose name+MD5
+  already match is a pure optimisation — the resulting draft is identical either
+  way — so it is unconditional rather than a flag, and re-runs after a partial
+  failure are cheap. This is why the old `--sync` distinction disappears from the
+  CLI: plain upload is *already* the incremental one.
+- **`mirror_files`** does both halves: deletes first, then uploads, so a rename
+  doesn't transiently exceed a quota. It is the only method in the library that
+  removes files the caller didn't name, and the name is the warning.
+- Both share one private `_diff_files` helper, so there is no duplicated diff
+  logic to drift.
+- `delete_files` / `delete_all_files` stay as the explicit, targeted deletes.
+
+Naming symmetry with Part 4: `mirror_files` is what `FilesMode.mirror` calls, and
+`upload_files` is what the other two modes call.
 
 ---
 
@@ -337,20 +646,24 @@ a draft with **no files**. Inheriting the previous version's files is the opt-in
 action `import_files`. `FilesMode` in the high-level `create_new_version`
 expresses the three sensible policies:
 
-- **`replace`** (default) — empty draft, upload only `files`. The "don't carry
-  anything over" behaviour that was impossible on the legacy API.
+- **`start_fresh`** (default) — empty draft, `upload_files(files)`. The "don't
+  carry anything over" behaviour that was impossible on the legacy API.
 - **`inherit`** — `import_files` first (reuse previous files, no storage
-  duplication), then add `files` on top.
-- **`sync`** — `import_files`, then `sync_files(delete_extraneous=True)` against
-  `files`: unchanged inherited files stay (no re-upload), removed ones are
-  deleted, only changed/new files are transferred. The efficient release path.
+  duplication), then `upload_files(files)` on top.
+- **`mirror`** — `import_files`, then `mirror_files(files)`: unchanged inherited
+  files stay (no re-upload), **inherited files not in `files` are deleted**, only
+  changed/new files are transferred. The efficient release path. Named `mirror`,
+  not `sync`, precisely because it deletes — see the naming note in Part 1.3.
 
 ```python
 new_id = create_new_version(
     record_id, client,
-    metadata=meta, files=paths, files_mode=FilesMode.sync, publish=True,
+    metadata=meta, files=paths, files_mode=FilesMode.mirror, publish=True,
 )
 ```
+
+`new_version` is get-or-create (Part 1.2.1), so re-running `create_new_version`
+after a failed upload resumes the same draft rather than creating a second one.
 
 ---
 
@@ -374,7 +687,7 @@ public and login-only records.
 | Draft | `GET /api/records/{id}/draft/files` | `GET /api/records/{id}/draft/files/{filename}/content` |
 
 Each listing entry carries `key` (filename), `size`, and `checksum`
-(`"md5:<hex>"`) — the same metadata `sync_files` (Part 3) already relies on.
+(`"md5:<hex>"`) — the same metadata the Part 3 diff already relies on.
 
 ### 5.2 `list_files` generalised
 
@@ -438,8 +751,8 @@ Implementation mirrors the upload path in reverse:
   resets the progress bar and `*.part` file.
 - **Overwrite guard.** Refuse to clobber an existing destination unless
   `overwrite=True`, and skip re-downloading a file whose local MD5 already
-  matches the remote checksum (cheap, idempotent re-runs, matching `sync_files`'
-  spirit).
+  matches the remote checksum (cheap, idempotent re-runs, mirroring the Part 3
+  upload diff).
 
 ### 5.4 Module-level helper
 
@@ -532,7 +845,7 @@ belong in Python where the new schema (Part 6) can be built and validated.
 ```bash
 # Upload local files to a draft
 openscm-zenodo upload-files RECORD_ID FILE... \
-    [--n-threads 4] [--sync] [--delete-extraneous] \
+    [--n-threads 4] [--mirror] \
     [--no-verify-checksum] [--no-progress] \
     [--zip [NAME]] [--zip-base-dir DIR] [--no-warn-path-stripped]
 
@@ -562,13 +875,15 @@ openscm-zenodo download-files 1234 a.nc b.nc --dest-dir data/
 
 Notes on each:
 
-- **`upload-files`** — thin wrapper over `client.upload_files` (Part 2).
-  `--sync` switches it to `sync_files` (Part 3) so re-runs only transfer changed
-  files, and `--delete-extraneous` (implies `--sync`) makes the draft match the
-  local set exactly. This is the one place the CLI earns its keep in CI.
-  Warns when a local path is stripped, and `--zip` bundles everything into one
-  archive to preserve structure (Part 11); grouping into several archives is
-  Python-only.
+- **`upload-files`** — thin wrapper over `client.upload_files` (Part 2), which
+  already skips files whose name+MD5 match the draft, so re-runs in CI only
+  transfer what changed with no flag needed. The old `--sync` therefore has
+  nothing left to switch on and is gone; `--delete-extraneous` is replaced by a
+  single **`--mirror`**, which calls `mirror_files` (Part 3) and makes the draft
+  match the local set exactly, deleting anything else. One destructive flag, named
+  for what it does. Warns when a local path is stripped, and `--zip` bundles
+  everything into one archive to preserve structure (Part 11); grouping into
+  several archives is Python-only.
 - **`download-files`** — wraps `download_files` (Part 5). `--dest-dir` defaults to
   the current directory. `--draft` targets an unpublished draft.
   **Embargoed / restricted records need no special flag** — access is just the
@@ -587,8 +902,14 @@ Both transfer commands show **one progress bar per file that disappears when tha
 file completes**, per the shared Part 2.1 contract; `--no-progress` forces them
 off, and they self-disable when stderr is not a TTY.
 
-Global options are unchanged: `--token`, `--zenodo-domain`, `--version`,
-`--no-logging`, `--logging-level`, `--logging-config`.
+Global options: `--token`, `--zenodo-domain`, `--version`, `--no-logging`,
+`--logging-level`, `--logging-config`, plus **`--env-file PATH`** and
+**`--no-env-file`** (Part 1.1.2). `--token` no longer declares typer's
+`envvar="ZENODO_TOKEN"`; it is passed through to `ZenodoClient(token=...)` and
+the environment/`.env` fallbacks are handled by `resolve_token`, so the whole
+precedence chain lives in one place. The option's help text states the order
+explicitly: `--token` → `ZENODO_SANDBOX_TOKEN` (sandbox only) → `ZENODO_TOKEN` →
+`.env`.
 
 ### 8.2 Removed commands
 
@@ -624,10 +945,11 @@ it only because it wasn't in the keep-list.
 ## Part 9 — Packaging, docs, tests
 
 - **pyproject.toml:** keep `[project.scripts]` and `typer` (Part 8); add
-  `tenacity>=8`; fix `description` ("Python library and CLI for uploading to and
-  downloading from Zenodo." — already handled by the Part 0
-  `project_description_short` answer if the field is template-owned) and the
-  `keyords` typo → `keywords` (keep `"command-line"`, add `"download"`).
+  `tenacity>=8` and `python-dotenv>=1` (CLI `.env` support, Part 1.1.2 — small,
+  no transitive deps, BSD-3 so `liccheck` is happy). ~~fix `description`~~ ✅ done in Part 0 (commit `72c0ecc`);
+  ~~fix the `keyords` typo → `keywords`~~ ✅ done in commit `104b956`. Still
+  outstanding here: add `"download"` to `keywords` (currently
+  `["openscm", "zenodo", "command-line"]`).
 - **Docs/README:** rewrite all examples as Python using `ZenodoClient` and the
   helpers, including a download example (`retrieve_files` / `download_files`)
   that shows fetching from both published and draft records and notes that
@@ -644,11 +966,13 @@ it only because it wasn't in the keep-list.
   - Unit tests for the **metadata translation/validation** (Part 6) — highest
     risk.
   - Unit tests for retry (mock 429→200), checksum verification (mock a
-    mismatching commit checksum → `ChecksumMismatchError`), `sync_files` diffing,
-    `reserve_doi`, and `load_metadata`.
+    mismatching commit checksum → `ChecksumMismatchError`), the shared
+    `_diff_files` logic behind `upload_files` / `mirror_files` (including that
+    `upload_files` never deletes and `mirror_files` does), `reserve_doi`, and
+    `load_metadata`.
   - CLI tests for the three retained commands (Part 8): `upload-files` with and
-    without `--sync`, `download-files` with `--draft` and with a subset of
-    `--filename`s, and `retrieve-citation` across `--format`/`--style`.
+    without `--mirror`, `download-files` with `--draft` and with a subset of
+    filenames, and `retrieve-citation` across `--format`/`--style`.
   - Unit tests for the MD5 timing logs: with a `caplog`-style capture, assert
     the shared helper emits the start/completion `debug` records and the
     over-threshold `info`/`warning`, and that it is silent below the threshold.
@@ -799,7 +1123,7 @@ upload_files_as_zip(...) to preserve the structure.
 - One warning per affected file, via `logger.warning` (the message points at both
   escape hatches, so the fix is discoverable from the warning alone).
 - Silenced by **`warn_path_stripped: bool = True`** on `upload_file`,
-  `upload_files`, `sync_files` and `upload_files_as_zip`; `--no-warn-path-stripped`
+  `upload_files`, `mirror_files` and `upload_files_as_zip`; `--no-warn-path-stripped`
   on the CLI.
 - Warn only when something is actually lost: a bare `data.nc` or `./data.nc`
   produces no warning.
@@ -817,8 +1141,8 @@ upload_files(id, [Path("2024/data.nc"), Path("2025/data.nc")])   # -> DuplicateF
 Currently the second silently overwrites the first, so this is a genuine bug fix.
 It is an exception rather than a warning because there is no correct
 interpretation — the user must either rename, upload separately, or zip. The
-error message says exactly that. `sync_files` (Part 3) diffs on remote name and
-gains the same check.
+error message says exactly that. `mirror_files` (Part 3) diffs on remote name
+and gains the same check.
 
 ### 11.3 Zipping to preserve structure
 
@@ -890,8 +1214,8 @@ def upload_files_as_zip(
 
 A stock `zipfile` archive embeds each member's mtime, so re-zipping the *same*
 files produces a **different MD5 every time**. That would quietly defeat
-`sync_files` (Part 3), which skips files whose name+MD5 already match — every
-sync would re-upload the whole archive. So `deterministic=True` (the default):
+the Part 3 diff, which skips files whose name+MD5 already match — every
+re-run would re-upload the whole archive. So `deterministic=True` (the default):
 
 - sort members by their in-archive path,
 - pin each `ZipInfo.date_time` to a fixed timestamp,
@@ -963,6 +1287,7 @@ implemented:
 | parent id | `get_parent_id` | prod (read) |
 | `POST /api/records` | `create_record` | sandbox |
 | `GET /api/records/{id}/draft` | `get_draft` | sandbox |
+| `POST /api/records/{id}/draft` | `get_or_create_draft` | sandbox |
 | `PUT /api/records/{id}/draft` | `update_metadata` | sandbox |
 | `POST /api/records/{id}/draft/files` | upload init | sandbox |
 | `PUT .../draft/files/{name}/content` | upload content | sandbox |
@@ -981,20 +1306,33 @@ On top of per-endpoint coverage:
 
 - **Full lifecycle** (sandbox): `create_record` → `update_metadata` →
   `reserve_doi` → `upload_files` → `list_files` → `publish` → `new_version` for
-  each `FilesMode` → `sync_files` → `download_files` round-trip into a temp dir
+  each `FilesMode` → `mirror_files` → `download_files` round-trip into a temp dir
   with checksum verification.
 - **Restricted access** (sandbox): create a restricted record, then confirm
   download succeeds with a token and returns `403` (as `ZenodoHTTPError`) without
   one — the embargoed path from Part 5.
-- **Idempotent re-run**: `sync_files` twice with unchanged files uploads nothing
+- **Idempotent re-run**: `upload_files` twice with unchanged files uploads nothing
   the second time; `download_files` twice re-downloads nothing.
+- **Draft idempotency** (sandbox, Part 1.2.1): `get_or_create_draft` twice on a
+  published record returns the same draft id, and `new_version` twice returns the
+  same next-version id — pinning the upstream InvenioRDM get-or-create behaviour
+  against Zenodo's actual build.
+- **`mirror_files` deletes, `upload_files` does not** (sandbox): upload two files,
+  then call each with only one of them and assert the remote file list — the
+  single most important behavioural difference in the library.
+- **Token precedence** (unit, Part 1.1.1): `resolve_token` with an injected `env`
+  mapping — explicit beats `ZENODO_SANDBOX_TOKEN` beats `ZENODO_TOKEN`; sandbox
+  domain prefers `ZENODO_SANDBOX_TOKEN`; production ignores it; nothing set
+  returns `None`, and a write then raises `MissingTokenError` before any request.
+  Plus a CLI test that a `.env` in `tmp_path` is picked up but does **not**
+  override a real env var.
 - **Path stripping and zipping** (sandbox, Part 11): upload `sub/dir/f.nc` and
   assert it lands as `f.nc` with the warning emitted (and silent under
   `warn_path_stripped=False`); colliding basenames raise `DuplicateFileKeyError`
   before any request; `upload_files_as_zip` round-trips — upload an archive,
   download it, unzip it, and assert the directory structure survived.
 - **Zip determinism** (unit, Part 11.3): zipping the same inputs twice produces
-  byte-identical archives, and a zip-then-`sync_files` re-run uploads nothing the
+  byte-identical archives, and a zip-then-`upload_files` re-run uploads nothing the
   second time. This guards the interaction that would otherwise silently make
   every sync re-upload the full archive.
 - **Metadata schema** (sandbox): round-trip a full InvenioRDM metadata document
@@ -1022,21 +1360,24 @@ On top of per-endpoint coverage:
    `include_cli: true`, fix `project_description_short`, then re-lock and run
    `make check`. Own commit, before any library work.~~ ✅ **DONE** (commit
    `72c0ecc`, template now `v0.15.4`).
-1. **Client + transport foundation** — new `ZenodoClient` skeleton, shared
-   session, `urllib3.Retry` adapter, `_request`, exceptions module. Bearer auth.
+1. **Client + transport foundation** — new `ZenodoClient` skeleton, injectable
+   session + public `build_session`, `urllib3.Retry` adapter, `_request`,
+   exceptions module, Bearer auth, `resolve_token` precedence chain and the
+   `RecordID`/`ParentID` `NewType`s (Part 1.1).
 2. **Read paths** — `get_record`, `get_draft`, `get_metadata`, `get_citation`
    (Part 10), `list_files`. Cheap, and they exercise the transport.
 3. **Metadata (Part 6)** — schema rewrite + `load_metadata` + validation. Biggest
    item; do it early so everything downstream uses the right shape.
-4. **Write paths** — `create_record`, `update_metadata`, `publish`,
-   `reserve_doi`, `new_version` / `import_files`, `delete_files`.
+4. **Write paths** — `create_record`, `get_or_create_draft` (Part 1.2.1),
+   `update_metadata`, `publish`, `reserve_doi`, `new_version` / `import_files`,
+   `delete_files`.
 5. **Uploads (Parts 2, 11)** — the init→content→commit `upload_file`, `tenacity`
    upload retry, checksum verification, `upload_files` parallelism, the shared
    `leave=False` progress-bar helper (Part 2.1), and the path-stripping warning +
    basename-collision error (Part 11.1–11.2). `zipping.py` and
    `upload_files_as_zip` (Part 11.3) land here too — but note the determinism
-   requirement only pays off once `sync_files` exists in step 6.
-6. **Sync + versions (Parts 3–4)** — `sync_files`, then `create_new_version`
+   requirement only pays off once `mirror_files` exists in step 6.
+6. **Mirror + versions (Parts 3–4)** — `mirror_files`, then `create_new_version`
    with `FilesMode`.
 7. **Download (Part 5)** — `list_files(draft=...)`, `download_file` /
    `download_files` / `retrieve_files`. Reuses the session, checksum helper,
