@@ -34,7 +34,7 @@ classifiers = [
     "Programming Language :: Python :: 3.14",
     "Typing :: Typed",
 ]
-keyords = ["openscm", "zenodo", "command-line"]
+keywords = ["openscm", "zenodo", "command-line"]
 
 [project.urls]
 Homepage = "https://openscm-zenodo.readthedocs.io"

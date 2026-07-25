@@ -32,7 +32,15 @@ piece of work and the most visible break for downstream users.
 
 ---
 
-## Part 0 — Repository template update (`copier update`)
+## Part 0 — Repository template update (`copier update`) — ✅ DONE
+
+**Done by the user in commit `72c0ecc` ("Update copier").** The template is now at
+`_commit: v0.15.4`, `include_cli` stayed `true`, and `project_description_short`
+(and hence `pyproject.toml`'s `description`) is
+`"Python API and command-line tool for interacting with zenodo."` — same intent as
+the wording proposed below, so Part 9 should treat the `description` field as
+already settled and only fix the `keyords` → `keywords` typo. Original plan text
+kept below for reference.
 
 The repo is generated from `gl:znicholls/copier-core-python-repository`, currently
 pinned at `_commit: v0.14.2` in `.copier-answers.yml`. Before touching the
@@ -1010,9 +1018,10 @@ On top of per-endpoint coverage:
 
 ## Suggested sequencing
 
-0. **`copier update` (Part 0)** — refresh the template from `v0.14.2`, keep
+0. ~~**`copier update` (Part 0)** — refresh the template from `v0.14.2`, keep
    `include_cli: true`, fix `project_description_short`, then re-lock and run
-   `make check`. Own commit, before any library work.
+   `make check`. Own commit, before any library work.~~ ✅ **DONE** (commit
+   `72c0ecc`, template now `v0.15.4`).
 1. **Client + transport foundation** — new `ZenodoClient` skeleton, shared
    session, `urllib3.Retry` adapter, `_request`, exceptions module. Bearer auth.
 2. **Read paths** — `get_record`, `get_draft`, `get_metadata`, `get_citation`
