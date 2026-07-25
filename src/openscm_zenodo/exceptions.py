@@ -73,6 +73,43 @@ class MissingTokenError(ZenodoError):
         super().__init__(msg)
 
 
+class ChecksumMismatchError(ZenodoError):
+    """
+    Raised when a transferred file's checksum does not match the one we expected
+
+    The request itself succeeded, the bytes were wrong,
+    so no amount of transport-level retrying would have caught this.
+    """
+
+    def __init__(self, name: str, *, local_md5: str, remote_md5: str) -> None:
+        """
+        Initialise
+
+        Parameters
+        ----------
+        name
+            Name of the file whose checksum did not match
+
+        local_md5
+            MD5 checksum of the local file
+
+        remote_md5
+            MD5 checksum reported by Zenodo
+        """
+        self.name = name
+        self.local_md5 = local_md5
+        self.remote_md5 = remote_md5
+
+        msg = (
+            f"The checksum of {name!r} does not match. "
+            f"Locally we calculated {local_md5!r}, "
+            f"Zenodo reports {remote_md5!r}. "
+            "The transfer was corrupted."
+        )
+
+        super().__init__(msg)
+
+
 class ZenodoHTTPError(ZenodoError):
     """
     Raised when Zenodo returns an unsuccessful HTTP status code

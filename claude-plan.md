@@ -444,7 +444,30 @@ draft's file list — nothing carried over, everything carried over, made to mat
 
 ---
 
-## Part 2 — File upload: the commit flow + robustness
+## Part 2 — File upload: the commit flow + robustness — ✅ IMPLEMENTED
+
+**Done.** `ZenodoClient.upload_file` and `delete_file`, plus two new modules —
+`openscm_zenodo/checksums.py` (the shared MD5 helper and its timing logs) and
+`openscm_zenodo/progress.py` (the 2.1 progress-bar contract) — with unit tests
+and **live sandbox tests** (`tests/integration/test_upload_integration.py`).
+Deltas from the text below, all deliberate:
+
+- **The MD5 is computed in its own pass, not while the upload streams.** Part 3's
+  diff needs the local MD5 *before* deciding whether to upload at all, so hashing
+  during the upload would duplicate the work in the common path. The file is still
+  read in chunks, so large files are fine.
+- **Retry set is narrower than "any failure".** `should_retry_upload` retries
+  `ChecksumMismatchError`, connection/timeout errors, and `ZenodoHTTPError` only
+  for 429/5xx. Retrying a rejected upload four more times helps nobody.
+- **The retried unit is the whole three-step flow**, not just the content `PUT`. A
+  committed file's content cannot be replaced and a pending one cannot be resumed,
+  so each attempt deletes and re-initialises. That also gives re-uploads and
+  recovery from a half-finished upload for free.
+- **`--sync`-style flags and parallelism are not here** — `upload_files`,
+  `list_files` and `mirror_files` are Part 3, along with the progress-bar
+  `position` slot allocator (the parameter exists, nothing allocates slots yet).
+- `get_default_config` (`logging.py`) now writes through `tqdm.write` on stderr,
+  which is what stops log lines shredding the bars.
 
 InvenioRDM uploads are a three-step, explicitly-committed flow. This replaces the
 single bucket `PUT`. The three steps become one `upload_file` method:

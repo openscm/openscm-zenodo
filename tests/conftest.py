@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 import requests
+from loguru import logger
 
 if TYPE_CHECKING:
     import _pytest
@@ -104,6 +105,25 @@ def make_recording_session():
     Get a factory for sessions which record requests and return canned responses
     """
     return RecordingSession
+
+
+@pytest.fixture
+def log_messages():
+    """
+    Capture the messages logged by `openscm_zenodo`
+
+    We use loguru, which does not go through the standard library's logging,
+    so pytest's `caplog` does not see our messages.
+    """
+    res = []
+
+    handler_id = logger.add(res.append, level="DEBUG", format="{message}")
+    logger.enable("openscm_zenodo")
+
+    yield res
+
+    logger.disable("openscm_zenodo")
+    logger.remove(handler_id)
 
 
 @pytest.fixture

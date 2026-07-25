@@ -388,6 +388,8 @@ soupsieve==2.7
     # via beautifulsoup4
 stack-data==0.6.3
     # via ipython
+tenacity==9.1.4
+    # via openscm-zenodo
 terminado==0.18.1
     # via
     #   jupyter-server

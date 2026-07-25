@@ -4,11 +4,12 @@ Logging
 
 from __future__ import annotations
 
-import sys
 from pathlib import Path
 from typing import TYPE_CHECKING, TypedDict
 
 from loguru import logger
+
+from openscm_zenodo.progress import tqdm_write_sink
 
 if TYPE_CHECKING:
     from loguru import HandlerConfig
@@ -41,7 +42,9 @@ def get_default_config(
     return dict(
         handlers=[
             dict(
-                sink=sys.stderr,
+                # Write via `tqdm` so that log lines emitted during a transfer
+                # do not shred the progress bars
+                sink=tqdm_write_sink,
                 level=level,
                 colorize=True,
                 format=" - ".join(

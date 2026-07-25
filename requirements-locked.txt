@@ -31,6 +31,8 @@ rich==14.1.0
     # via typer
 shellingham==1.5.4
     # via typer
+tenacity==9.1.4
+    # via openscm-zenodo
 tqdm==4.67.1
     # via openscm-zenodo
 typer==0.16.0

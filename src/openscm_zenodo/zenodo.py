@@ -9,6 +9,7 @@ import json
 import logging
 import os
 import os.path
+import urllib.parse
 from collections.abc import Collection, Iterable, Mapping
 from enum import Enum, auto
 from pathlib import Path
@@ -19,6 +20,7 @@ from typing import (
     NewType,
     NoReturn,
     TypeAlias,
+    cast,
     overload,
 )
 
@@ -29,12 +31,32 @@ from attrs import define, field
 from dotenv import find_dotenv, load_dotenv
 from loguru import logger
 from requests.adapters import HTTPAdapter
+from tenacity import (
+    RetryCallState,
+    Retrying,
+    retry_if_exception,
+    stop_after_attempt,
+    wait_exponential_jitter,
+)
 from urllib3.util.retry import Retry
 
-from openscm_zenodo.exceptions import MissingTokenError, ZenodoError, ZenodoHTTPError
+from openscm_zenodo.checksums import assert_md5_matches, get_file_md5
+from openscm_zenodo.exceptions import (
+    ChecksumMismatchError,
+    MissingTokenError,
+    ZenodoError,
+    ZenodoHTTPError,
+)
 from openscm_zenodo.logging import mask_token
+from openscm_zenodo.progress import (
+    get_file_progress_bar,
+    get_progress_reading_wrapper,
+)
 
 _LOGGER = logging.getLogger(__name__)
+
+HTTP_BAD_REQUEST = 400
+"""HTTP status code Zenodo returns when it will not accept a request"""
 
 TQDM_UPLOAD_PROGRESS_KWARGS_DEFAULT = dict(
     unit="B",
@@ -427,6 +449,63 @@ def build_session(
     return session
 
 
+def should_retry_upload(
+    exc: BaseException,
+    *,
+    retry_status_forcelist: tuple[int, ...] = (429, 500, 502, 503, 504),
+) -> bool:
+    """
+    Decide whether an upload which raised `exc` should be tried again
+
+    Parameters
+    ----------
+    exc
+        Exception raised by the upload attempt
+
+    retry_status_forcelist
+        HTTP status codes which are worth trying again
+
+    Returns
+    -------
+    :
+        `True` if the upload is worth trying again
+    """
+    if isinstance(exc, ChecksumMismatchError):
+        # Not an HTTP failure at all: the request succeeded, the bytes were wrong.
+        # No transport-level retry can see this.
+        return True
+
+    if isinstance(exc, ZenodoHTTPError):
+        # Zenodo answered, so only try again if the answer suggests it is worth it.
+        # Retrying a rejected upload four more times helps nobody.
+        return exc.response.status_code in retry_status_forcelist
+
+    # Connection errors, read timeouts and the like.
+    # The session's retries cannot cover the content request,
+    # because its body is a file handle which cannot be replayed.
+    return isinstance(exc, requests.exceptions.RequestException)
+
+
+def _log_upload_retry(retry_state: RetryCallState) -> None:
+    """
+    Log that an upload is about to be tried again
+
+    Parameters
+    ----------
+    retry_state
+        State of the retrying, as tenacity reports it
+    """
+    exc = retry_state.outcome.exception() if retry_state.outcome is not None else None
+    sleep = (
+        retry_state.next_action.sleep if retry_state.next_action is not None else 0.0
+    )
+
+    logger.warning(
+        f"Upload attempt {retry_state.attempt_number} failed with {exc!r}. "
+        f"Trying again in {sleep:.1f}s."
+    )
+
+
 def _repr_token(token: str | None) -> str:
     """Get the `repr` to use for a token, i.e. never the token itself"""
     return "None" if token is None else "***"
@@ -720,6 +799,379 @@ class ZenodoClient:
             self._handle_error_response(response, description=description)
 
         return response
+
+    def _get_draft_file_path(
+        self, record_id: str, filename: str, suffix: str = ""
+    ) -> str:
+        """
+        Get the path of one of a draft's files
+
+        Parameters
+        ----------
+        record_id
+            ID of the record whose draft the file belongs to
+
+        filename
+            Name of the file, as it appears on Zenodo
+
+        suffix
+            Suffix to append, for example "/content" or "/commit"
+
+        Returns
+        -------
+        :
+            Path of the file
+        """
+        # `filename` comes from the local file system,
+        # so it can contain characters which are not URL safe
+        quoted = urllib.parse.quote(filename, safe="")
+
+        return f"/api/records/{record_id}/draft/files/{quoted}{suffix}"
+
+    def delete_file(self, record_id: str | RecordID, filename: str) -> None:
+        """
+        Delete a file from a record's draft
+
+        Parameters
+        ----------
+        record_id
+            ID of the record whose draft to delete the file from
+
+        filename
+            Name of the file to delete, as it appears on Zenodo
+        """
+        logger.info(f"Deleting {filename!r} from the draft of {record_id!r}")
+        self._request(
+            self._get_draft_file_path(record_id, filename),
+            method="DELETE",
+            requires_auth=True,
+            description=f"delete {filename!r} from the draft of record {record_id!r}",
+        )
+
+    def _initialise_file(self, record_id: str, filename: str) -> None:
+        """
+        Initialise a file on a record's draft, the first step of an upload
+
+        If `filename` is already on the draft, we delete it and start again.
+        That covers both re-uploading a file which has changed
+        and picking up after a previous upload
+        which died between initialising and committing.
+
+        Parameters
+        ----------
+        record_id
+            ID of the record whose draft to initialise the file on
+
+        filename
+            Name of the file, as it will appear on Zenodo
+        """
+        path = f"/api/records/{record_id}/draft/files"
+        description = f"initialise {filename!r} on the draft of record {record_id!r}"
+
+        try:
+            self._request(
+                path,
+                method="POST",
+                requires_auth=True,
+                json=[{"key": filename}],
+                description=description,
+            )
+
+        except ZenodoHTTPError as exc:
+            if exc.response.status_code != HTTP_BAD_REQUEST:
+                raise
+
+            logger.debug(
+                f"Could not initialise {filename!r} on the draft of {record_id!r}, "
+                "assuming it is already there. "
+                "Deleting it and initialising again."
+            )
+            self.delete_file(record_id, filename)
+            self._request(
+                path,
+                method="POST",
+                requires_auth=True,
+                json=[{"key": filename}],
+                description=description,
+            )
+
+    def _upload_file_content(
+        self,
+        record_id: str,
+        path: Path,
+        *,
+        filename: str,
+        progress: bool = True,
+        position: int | None = None,
+    ) -> None:
+        """
+        Upload a file's content, the second step of an upload
+
+        Parameters
+        ----------
+        record_id
+            ID of the record whose draft to upload to
+
+        path
+            File to upload
+
+        filename
+            Name of the file, as it will appear on Zenodo
+
+        progress
+            Should a progress bar be shown?
+
+        position
+            Line to display the progress bar on
+        """
+        with get_file_progress_bar(
+            desc=filename,
+            total=path.stat().st_size,
+            progress=progress,
+            position=position,
+        ) as progress_bar:
+            with open(path, "rb") as file_handle:
+                self._request(
+                    self._get_draft_file_path(record_id, filename, "/content"),
+                    method="PUT",
+                    requires_auth=True,
+                    data=get_progress_reading_wrapper(file_handle, progress_bar),
+                    headers={"Content-Type": "application/octet-stream"},
+                    timeout=self.timeout_upload,
+                    description=(
+                        f"upload {filename!r} to the draft of record {record_id!r}"
+                    ),
+                )
+
+    def _commit_file(self, record_id: str, filename: str) -> dict[str, Any]:
+        """
+        Commit a file, the third and final step of an upload
+
+        Parameters
+        ----------
+        record_id
+            ID of the record whose draft the file belongs to
+
+        filename
+            Name of the file, as it appears on Zenodo
+
+        Returns
+        -------
+        :
+            The file's entry on the draft.
+
+            Among other things, this reports the checksum
+            which Zenodo calculated for the bytes it received.
+        """
+        response = self._request(
+            self._get_draft_file_path(record_id, filename, "/commit"),
+            method="POST",
+            requires_auth=True,
+            description=f"commit {filename!r} to the draft of record {record_id!r}",
+        )
+
+        return cast(dict[str, Any], response.json())
+
+    def _upload_file_attempt(  # noqa: PLR0913
+        self,
+        record_id: str,
+        path: Path,
+        *,
+        filename: str,
+        local_md5: str | None,
+        progress: bool,
+        position: int | None,
+    ) -> dict[str, Any]:
+        """
+        Make one attempt at uploading a file
+
+        This is the unit that is retried,
+        so it starts by initialising the file from scratch:
+        the content of a committed file cannot be replaced,
+        and a partly-uploaded file cannot be resumed.
+
+        Parameters
+        ----------
+        record_id
+            ID of the record whose draft to upload to
+
+        path
+            File to upload
+
+        filename
+            Name of the file, as it will appear on Zenodo
+
+        local_md5
+            MD5 checksum of `path`.
+
+            If supplied, we check it against the checksum
+            Zenodo reports once the file is committed.
+
+        progress
+            Should a progress bar be shown?
+
+        position
+            Line to display the progress bar on
+
+        Returns
+        -------
+        :
+            The file's entry on the draft
+
+        Raises
+        ------
+        ChecksumMismatchError
+            `local_md5` was supplied and does not match the checksum
+            reported by Zenodo
+        """
+        self._initialise_file(record_id, filename)
+        self._upload_file_content(
+            record_id, path, filename=filename, progress=progress, position=position
+        )
+        entry = self._commit_file(record_id, filename)
+
+        if local_md5 is not None:
+            assert_md5_matches(
+                filename, local_md5=local_md5, remote_checksum=entry["checksum"]
+            )
+
+        return entry
+
+    def _clean_up_failed_upload(self, record_id: str, filename: str) -> None:
+        """
+        Remove what is left of an upload which failed
+
+        A draft which has a file that was initialised but never committed
+        cannot be published,
+        so leaving one behind turns a failed upload
+        into a draft that is broken in a way that is hard to diagnose.
+
+        Parameters
+        ----------
+        record_id
+            ID of the record whose draft to clean up
+
+        filename
+            Name of the file whose upload failed
+        """
+        try:
+            self.delete_file(record_id, filename)
+
+        except ZenodoError as exc:
+            logger.warning(
+                f"Failed to clean up {filename!r} "
+                f"on the draft of record {record_id!r} after a failed upload: {exc}. "
+                "The draft may not be publishable until this file is removed."
+            )
+
+    def upload_file(  # noqa: PLR0913
+        self,
+        record_id: str | RecordID,
+        path: Path,
+        *,
+        verify_checksum: bool = True,
+        progress: bool = True,
+        position: int | None = None,
+        max_attempts: int = 5,
+    ) -> dict[str, Any]:
+        """
+        Upload a file to a record's draft
+
+        InvenioRDM uploads are a three-step, explicitly-committed flow:
+        the file is initialised on the draft,
+        its content is streamed up,
+        then it is committed.
+        This does all three.
+
+        The record must already have a draft.
+
+        Note that Zenodo has no directories:
+        the file lands under `path.name`,
+        whatever local directories it sits in.
+
+        Parameters
+        ----------
+        record_id
+            ID of the record whose draft to upload to
+
+        path
+            File to upload
+
+        verify_checksum
+            Should we check that Zenodo received the bytes we sent?
+
+            We compare the file's local MD5 checksum
+            against the checksum Zenodo reports when the file is committed.
+            This costs one extra read of the file, so it can be turned off,
+            but a corrupted upload is worse than a slow one.
+
+        progress
+            Should a progress bar be shown?
+
+        position
+            Line to display the progress bar on.
+
+            Give each worker a stable slot when uploading in parallel.
+
+        max_attempts
+            Maximum number of times to try the upload before giving up.
+
+            The retries mounted on the session
+            (see [`build_session`][openscm_zenodo.zenodo.build_session])
+            cannot help here:
+            the content request streams a file handle which cannot be replayed,
+            and a checksum mismatch is not an HTTP failure at all.
+            So the whole upload is retried instead,
+            re-reading the file and resetting the progress bar each time.
+
+        Returns
+        -------
+        :
+            The file's entry on the draft, as Zenodo reports it once committed
+
+        Raises
+        ------
+        ChecksumMismatchError
+            `verify_checksum` is `True` and the upload was corrupted
+            on every attempt
+
+        ZenodoHTTPError
+            Zenodo rejected the upload
+        """
+        filename = path.name
+        logger.info(
+            f"Uploading {path} as {filename!r} to the draft of record {record_id!r}"
+        )
+
+        local_md5 = get_file_md5(path) if verify_checksum else None
+
+        retrying = Retrying(
+            retry=retry_if_exception(should_retry_upload),
+            stop=stop_after_attempt(max_attempts),
+            wait=wait_exponential_jitter(initial=1.0, max=60.0),
+            before_sleep=_log_upload_retry,
+            reraise=True,
+        )
+
+        try:
+            entry = retrying(
+                self._upload_file_attempt,
+                record_id,
+                path,
+                filename=filename,
+                local_md5=local_md5,
+                progress=progress,
+                position=position,
+            )
+
+        except Exception:
+            self._clean_up_failed_upload(record_id, filename)
+
+            raise
+
+        logger.info(f"Successfully uploaded {path} as {filename!r}")
+
+        return entry
 
 
 @define
