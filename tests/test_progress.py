@@ -177,9 +177,24 @@ def test_get_files_progress_bar(captured_kwargs):
 
     assert captured_kwargs["unit"] == "file"
     assert captured_kwargs["total"] == 3
-    assert not captured_kwargs["leave"]
-    # Line zero, i.e. below the per-file bars
+    # The overall bar stays once the operation finishes,
+    # unlike the per-file bars
+    assert captured_kwargs["leave"]
+    # Lines count downwards, so line zero is above the per-file bars
     assert captured_kwargs["position"] == 0
+
+
+def test_progress_bar_layout():
+    """
+    The overall bar is above the per-file bars
+
+    tqdm counts lines downwards, so a lower position is higher up the screen.
+    """
+    allocator = PositionAllocator(n_slots=3)
+
+    with allocator.slot() as first, allocator.slot() as second:
+        assert first > 0
+        assert second > first
 
 
 def test_get_progress_reading_wrapper_proxies():

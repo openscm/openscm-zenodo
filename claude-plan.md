@@ -669,6 +669,12 @@ below, all deliberate:
   the file being hashed twice.
 - **Both return the draft's files after the call** (`dict[str, FileEntry]`),
   derived from the listing plus what was uploaded, with no extra request.
+- **Bar layout:** tqdm counts lines *downwards*, so the overall files bar sits at
+  line zero, i.e. at the top, with the per-file bars beneath it. The overall bar
+  uses `leave=True` and stays once the operation finishes — "uploaded 40 of 40
+  files" is worth keeping — while the per-file bars keep `leave=False` and are
+  erased as each file completes. `scripts/demo-progress-bars.py` shows this
+  without touching Zenodo.
 - **The progress-bar position allocator** (2.1) landed here rather than in Part 2,
   since this is where parallelism arrives: `PositionAllocator` hands each worker a
   line and takes it back when the file finishes. Running out of lines raises,

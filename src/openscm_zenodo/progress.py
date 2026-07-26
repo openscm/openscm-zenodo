@@ -84,6 +84,9 @@ def get_file_progress_bar(
 
         Give each worker a stable slot when transferring in parallel,
         otherwise the bars jump around.
+        Lines count downwards and line zero is taken by the overall files bar,
+        so these start at one, see
+        [`PositionAllocator`][openscm_zenodo.progress.PositionAllocator].
 
     desc_max_length
         Number of characters of `desc` to show
@@ -146,8 +149,12 @@ def get_files_progress_bar(
     Get a progress bar which counts files, rather than bytes
 
     This is the overall bar for an operation on many files.
-    The per-file bars sit above it, see
+    It sits at the top, with the per-file bars underneath it, see
     [`get_file_progress_bar`][openscm_zenodo.progress.get_file_progress_bar].
+
+    Unlike the per-file bars, this one stays on screen when it finishes.
+    The per-file bars are noise once their file is done,
+    but "uploaded 40 of 40 files" is worth keeping.
 
     Parameters
     ----------
@@ -166,7 +173,8 @@ def get_files_progress_bar(
     position
         Line to display the bar on.
 
-        The default, `0`, keeps it below the per-file bars.
+        Lines count downwards, so the default, `0`,
+        puts this bar above the per-file bars.
 
     **kwargs
         Passed to [`tqdm.tqdm`][tqdm.tqdm]
@@ -178,8 +186,7 @@ def get_files_progress_bar(
     """
     tqdm_kwargs: dict[str, Any] = {
         "unit": "file",
-        # Erased when the operation finishes, so the terminal is left clean
-        "leave": False,
+        "leave": True,
         "dynamic_ncols": True,
         "disable": None if progress else True,
         "desc": desc,
@@ -209,7 +216,8 @@ class PositionAllocator:
     """
     Line of the first slot
 
-    The default leaves line zero for the overall files bar.
+    Lines count downwards, so the default leaves line zero
+    for the overall files bar, which sits above the per-file bars.
     """
 
     _free: list[int] = field(init=False, factory=list)
