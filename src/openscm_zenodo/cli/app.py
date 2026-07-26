@@ -17,7 +17,7 @@ from openscm_zenodo.logging import setup_logging
 from openscm_zenodo.zenodo import (
     ZenodoDomain,
     ZenodoInteractor,
-    create_new_version,
+    create_new_version_legacy,
     get_reserved_doi,
     load_env_file,
     resolve_token,
@@ -405,7 +405,7 @@ def create_new_version_command(  # noqa: PLR0913
         zenodo_domain=zenodo_domain,
     )
 
-    new_deposit_id = create_new_version(
+    new_deposit_id = create_new_version_legacy(
         any_deposition_id=any_deposition_id,
         metadata=metadata,
         zenodo_interactor=zenodo_interactor,

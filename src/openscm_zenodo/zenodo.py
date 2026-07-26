@@ -113,6 +113,40 @@ class RestAction(Enum):
 
 MetadataType: TypeAlias = dict[str, dict[str, str]]
 
+
+class FilesMode(str, Enum):
+    """
+    How a new version of a record should treat files
+
+    The names line up one-for-one with what happens to the new draft's file list:
+    nothing carried over, everything carried over, or made to match.
+    """
+
+    start_fresh = "start_fresh"
+    """
+    Start from an empty draft, then upload the files given
+
+    Nothing is carried over from the previous version.
+    """
+
+    inherit = "inherit"
+    """
+    Carry the previous version's files over, then upload the files given on top
+
+    Inherited files are not re-uploaded, Zenodo copies them across itself.
+    """
+
+    mirror = "mirror"
+    """
+    Carry the previous version's files over, then make the draft match exactly
+
+    **This deletes files.** Inherited files which are not in the files given
+    are removed, and only changed or new files are transferred.
+    This is the efficient path for releasing a new version of a dataset
+    where most files have not changed.
+    """
+
+
 RecordID = NewType("RecordID", str)
 """
 The ID of a single version of a record
@@ -1733,6 +1767,204 @@ class ZenodoClient:
             record_id, tuple(self.list_files(record_id)), progress=progress
         )
 
+    def get_latest_version_id(self, record_id: str | RecordID) -> RecordID:
+        """
+        Get the ID of the latest version of a record
+
+        Parameters
+        ----------
+        record_id
+            ID of any published version of the record
+
+        Returns
+        -------
+        :
+            ID of the latest version
+        """
+        record = self._request(
+            f"/api/records/{record_id}",
+            description=f"get record {record_id!r}",
+        ).json()
+
+        latest = self._request(
+            record["links"]["latest"],
+            description=f"get the latest version of record {record_id!r}",
+        ).json()
+
+        return RecordID(str(latest["id"]))
+
+    def new_version(
+        self, record_id: str | RecordID, *, import_files: bool = False
+    ) -> RecordID:
+        """
+        Create a new version of a published record
+
+        The new version is a draft with **no files**.
+        Pass `import_files=True`, or call
+        [`import_files`][openscm_zenodo.zenodo.ZenodoClient.import_files],
+        to carry the previous version's files over.
+
+        This is get-or-create.
+        A record can have at most one unpublished next version,
+        so calling this again returns the draft that already exists
+        rather than creating a second one.
+        That is what makes a release script safe to re-run
+        after it has failed part way through.
+
+        Any published version of the record can be used,
+        it does not have to be the latest.
+
+        Parameters
+        ----------
+        record_id
+            ID of any published version of the record
+
+        import_files
+            Should the previous version's files be carried over?
+
+        Returns
+        -------
+        :
+            ID of the new version
+        """
+        logger.info(f"Creating a new version of record {record_id!r}")
+
+        response = self._request(
+            f"/api/records/{record_id}/versions",
+            method="POST",
+            requires_auth=True,
+            description=f"create a new version of record {record_id!r}",
+        )
+        new_version_id = RecordID(str(response.json()["id"]))
+
+        logger.info(f"The new version of record {record_id!r} is {new_version_id!r}")
+
+        if import_files:
+            self.import_files(new_version_id)
+
+        return new_version_id
+
+    def import_files(self, record_id: str | RecordID) -> bool:
+        """
+        Carry the previous version's files over to a record's draft
+
+        Zenodo copies the files across itself,
+        so nothing is uploaded and no storage is duplicated.
+
+        Parameters
+        ----------
+        record_id
+            ID of the record whose draft to import into
+
+        Returns
+        -------
+        :
+            Whether the files were imported.
+
+            This is `False` if the draft already has files on it,
+            in which case there is nothing to do:
+            Zenodo only allows importing into an empty draft
+            (`400 Please remove all files first.`).
+            Skipping rather than failing is what makes a release script
+            safe to re-run after it has failed part way through.
+        """
+        already_there = self.list_files(record_id)
+        if already_there:
+            logger.info(
+                f"Not importing files into record {record_id!r}, "
+                f"it already has {len(already_there)} file(s)"
+            )
+
+            return False
+
+        logger.info(f"Importing the previous version's files into {record_id!r}")
+        self._request(
+            f"/api/records/{record_id}/draft/actions/files-import",
+            method="POST",
+            requires_auth=True,
+            description=f"import files into record {record_id!r}",
+        )
+
+        return True
+
+    def update_metadata(
+        self, record_id: str | RecordID, metadata: dict[str, Any]
+    ) -> dict[str, Any]:
+        """
+        Update the metadata of a record's draft
+
+        Parameters
+        ----------
+        record_id
+            ID of the record whose draft to update
+
+        metadata
+            Metadata to apply.
+
+            This is the contents of the draft's `metadata` key,
+            not the whole draft.
+            Settings which live outside `metadata`, such as `access`,
+            are left as they are.
+
+        Returns
+        -------
+        :
+            The updated draft, as Zenodo reports it
+
+        Notes
+        -----
+        The InvenioRDM metadata schema is a breaking change
+        from the schema the legacy API used, and is Part 6 of the rewrite.
+        This method passes `metadata` through as it is given;
+        translating and validating it is still to come.
+        """
+        logger.info(f"Updating the metadata of record {record_id!r}")
+        logger.debug(f"New metadata: {metadata}")
+
+        response = self._request(
+            f"/api/records/{record_id}/draft",
+            method="PUT",
+            requires_auth=True,
+            json={"metadata": metadata},
+            description=f"update the metadata of record {record_id!r}",
+        )
+
+        return cast(dict[str, Any], response.json())
+
+    def publish(self, record_id: str | RecordID) -> RecordID:
+        """
+        Publish a record's draft
+
+        **This cannot be undone.**
+        A published record cannot be deleted,
+        and its files can no longer be changed;
+        changing anything after this means creating a new version, see
+        [`new_version`][openscm_zenodo.zenodo.ZenodoClient.new_version].
+
+        Parameters
+        ----------
+        record_id
+            ID of the record whose draft to publish
+
+        Returns
+        -------
+        :
+            ID of the published record
+        """
+        logger.info(f"Publishing record {record_id!r}")
+
+        response = self._request(
+            f"/api/records/{record_id}/draft/actions/publish",
+            method="POST",
+            requires_auth=True,
+            description=f"publish record {record_id!r}",
+        )
+        published_id = RecordID(str(response.json()["id"]))
+
+        logger.info(f"Successfully published record {published_id!r}")
+
+        return published_id
+
 
 @define
 class ZenodoInteractor:
@@ -2679,6 +2911,123 @@ def retrieve_bibtex_entry(
 
 
 def create_new_version(  # noqa: PLR0913
+    record_id: str | RecordID,
+    client: ZenodoClient | None = None,
+    *,
+    metadata: dict[str, Any] | None = None,
+    files: Collection[Path] | None = None,
+    files_mode: FilesMode = FilesMode.start_fresh,
+    publish: bool = False,
+    n_threads: int = 4,
+    progress: bool = True,
+) -> RecordID:
+    """
+    Create a new version of a record, in one call
+
+    This is the high-level path for releasing a new version of a dataset:
+    create the version, set its metadata, get its files into the state you want,
+    and optionally publish it.
+
+    It is safe to re-run.
+    Creating a new version is get-or-create, and the file methods
+    skip anything which is already there with the same contents,
+    so a run which failed part way through picks up where it left off
+    rather than creating a second draft.
+
+    Parameters
+    ----------
+    record_id
+        ID of any published version of the record to create a new version of
+
+    client
+        Client to interact with Zenodo with.
+
+        If not supplied, we build a default
+        [`ZenodoClient`][openscm_zenodo.zenodo.ZenodoClient].
+
+    metadata
+        Metadata to apply to the new version.
+
+        If not supplied, the new version keeps
+        the metadata it inherited from the previous version.
+
+    files
+        Files the new version should have.
+
+        How these combine with the previous version's files
+        is decided by `files_mode`.
+
+    files_mode
+        How the new version should treat files, see
+        [`FilesMode`][openscm_zenodo.zenodo.FilesMode]
+
+    publish
+        Should the new version be published once it is ready?
+
+        **Publishing cannot be undone.**
+
+    n_threads
+        Number of files to upload at once
+
+    progress
+        Should progress bars be shown?
+
+    Returns
+    -------
+    :
+        ID of the new version
+
+    Raises
+    ------
+    ValueError
+        `files_mode` is [`FilesMode.mirror`][openscm_zenodo.zenodo.FilesMode]
+        but no `files` were given.
+
+        Mirroring deletes whatever is not in `files`,
+        so we do not let that happen by omission.
+        Pass `files=[]` if you really do want the new version to have no files.
+    """
+    if files_mode is FilesMode.mirror and files is None:
+        msg = (
+            "`files` must be supplied when `files_mode` is `FilesMode.mirror`, "
+            "because mirroring deletes any file which is not in `files`. "
+            "Pass `files=[]` if you want the new version to have no files."
+        )
+
+        raise ValueError(msg)
+
+    if client is None:
+        client = ZenodoClient()
+
+    new_version_id = client.new_version(record_id)
+
+    if metadata is not None:
+        client.update_metadata(new_version_id, metadata)
+
+    if files_mode in (FilesMode.inherit, FilesMode.mirror):
+        client.import_files(new_version_id)
+
+    if files_mode is FilesMode.mirror:
+        # `files` cannot be `None` here, that is rejected above
+        client.mirror_files(
+            new_version_id,
+            cast(Collection[Path], files),
+            n_threads=n_threads,
+            progress=progress,
+        )
+
+    elif files:
+        client.upload_files(
+            new_version_id, files, n_threads=n_threads, progress=progress
+        )
+
+    if publish:
+        client.publish(new_version_id)
+
+    return new_version_id
+
+
+def create_new_version_legacy(  # noqa: PLR0913
     any_deposition_id: str,
     zenodo_interactor: ZenodoInteractor,
     metadata: MetadataType | None = None,
@@ -2687,7 +3036,12 @@ def create_new_version(  # noqa: PLR0913
     n_threads: int = 4,
 ) -> str:
     """
-    Create a new version of a given record
+    Create a new version of a given record, using the legacy API
+
+    This is the pre-InvenioRDM implementation.
+    It is kept only so that the command-line interface keeps working
+    while the rewrite lands, and goes when the CLI is trimmed (Part 8).
+    Use [`create_new_version`][openscm_zenodo.zenodo.create_new_version] instead.
 
     This starts from the ID of any deposition in the record/series.
 

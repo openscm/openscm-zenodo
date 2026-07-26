@@ -726,7 +726,56 @@ Naming symmetry with Part 4: `mirror_files` is what `FilesMode.mirror` calls, an
 
 ---
 
-## Part 4 — New versions
+## Part 4 — New versions — ✅ IMPLEMENTED
+
+**Done.** `new_version`, `import_files`, `publish`, `update_metadata`,
+`get_latest_version_id`, `FilesMode` and the `create_new_version` helper, with
+unit tests and live sandbox tests
+(`tests/integration/test_versions_integration.py`). Deltas and findings, all
+verified against the sandbox:
+
+- **`new_version` works from *any* published version, not just the latest.** The
+  legacy API required the latest id, which is why the old code looked it up
+  first; InvenioRDM does not. `get_latest_version_id` is still there because it
+  is useful, but `create_new_version` no longer needs it.
+- **`new_version` really is get-or-create on Zenodo's build** — calling it twice,
+  and calling it from two different versions of the same record, all return the
+  same draft id. §1.2.1's caveat is now a passing test.
+- **`import_files` only works into an *empty* draft.** A second import fails with
+  `400 "Please remove all files first."`, which would break exactly the re-run
+  that Part 4 promises. So `import_files` checks first and returns `False`
+  instead of failing when the draft already has files. The underlying Zenodo
+  behaviour has its own test, so we notice if it changes.
+- **`FilesMode.mirror` refuses to run without an explicit `files`.** Mirroring
+  deletes whatever is not listed, so it may not happen by omission; pass
+  `files=[]` to mean "no files".
+- **A metadata-only `PUT .../draft` does *not* wipe `access`** (checked with a
+  `restricted` record). So `update_metadata` can nest under `metadata` and leave
+  everything else alone. It is otherwise a pass-through — schema translation and
+  validation are still Part 6.
+- **Useful for Part 6:** Zenodo validates metadata when a record is **published**,
+  not when the draft is created or updated. A draft will happily accept an
+  incomplete document and then fail at publish with, for example,
+  `metadata.publisher: Missing publisher field required for DOI registration.`
+  That is a good argument for Part 6's client-side validation helper: it is the
+  only way to catch this before the irreversible step.
+- **Useful for Part 6:** Zenodo's default serialisation of
+  `/api/records/{id}[/draft]` is a *legacy-compatible* shape which hides `access`
+  and `pids` and renders `files` as a list.
+  `Accept: application/vnd.inveniordm.v1+json` returns the native InvenioRDM
+  document (`access`, `pids`, `parent`, `versions`, `is_draft`, …). Part 6 will
+  need that header.
+- **The legacy module-level `create_new_version` is now
+  `create_new_version_legacy`** so the new one can take the planned name. It and
+  its CLI command go in Part 8.
+- **Publishing is tested live like everything else.** Published sandbox records
+  cannot be deleted, so `tests/integration/test_publish_integration.py` leaves
+  records behind rather than cleaning up, which is why it is kept short. Having a
+  token is taken as consent to publish to the sandbox, so there is no extra
+  marker; `Part 12.1`'s "publish-path tests are marked and kept few" is therefore
+  only half true — kept few, not separately marked.
+
+
 
 `new_version` is trivial on InvenioRDM: `POST /api/records/{id}/versions` returns
 a draft with **no files**. Inheriting the previous version's files is the opt-in

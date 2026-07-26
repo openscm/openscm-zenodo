@@ -6,7 +6,10 @@ from __future__ import annotations
 
 import pytest
 
+from openscm_zenodo.exceptions import ZenodoHTTPError
 from openscm_zenodo.zenodo import ZenodoClient, ZenodoDomain
+
+HTTP_NOT_FOUND = 404
 
 DRAFT_METADATA = {
     "access": {"record": "public", "files": "public"},
@@ -23,13 +26,17 @@ DRAFT_METADATA = {
                 }
             }
         ],
+        # Only required at publish time, not to create the draft
+        "publisher": "Zenodo",
     },
 }
 """
 Metadata for the draft the tests upload to
 
 The full metadata story is Part 6 of the rewrite,
-this is just enough for the sandbox to accept a draft.
+this is just enough for the sandbox to accept a draft and then publish it.
+Zenodo validates metadata when a record is published, not when it is drafted,
+so a draft can be created with less than this.
 """
 
 
@@ -58,8 +65,15 @@ def draft_record_id(sandbox_client):
 
     yield record_id
 
-    sandbox_client._request(
-        f"/api/records/{record_id}/draft",
-        method="DELETE",
-        requires_auth=True,
-    )
+    try:
+        sandbox_client._request(
+            f"/api/records/{record_id}/draft",
+            method="DELETE",
+            requires_auth=True,
+        )
+
+    except ZenodoHTTPError as exc:
+        # A draft which was published is no longer a draft, so there is
+        # nothing left to clean up. Anything else is worth knowing about.
+        if exc.response.status_code != HTTP_NOT_FOUND:
+            raise
