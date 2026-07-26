@@ -496,8 +496,12 @@ Robustness, integrated here and in the client:
   (`total=max_retries`, `backoff_factor`, `status_forcelist=retry_status_forcelist`,
   `respect_retry_after_header=True`, all methods) — configured in `build_session`,
   not on the client. Gives status-based retry and honours Zenodo's `Retry-After`
-  on 429s. Also fixes the "weirdly flaky" parallelism that forced serial file
-  deletes — re-enable `n_threads` there.
+  on 429s. ~~Also fixes the "weirdly flaky" parallelism that forced serial file
+  deletes — re-enable `n_threads` there.~~ ❌ **Wrong, disproven against sandbox
+  in Part 3.** The old code's comment was right: concurrent deletes on one draft
+  race and Zenodo rejects the losers with `400 Not a valid value`, leaving those
+  files in place. It is not a transport problem, so retries do not help. Deletes
+  are serial; parallel *uploads* are fine.
 - **Upload retry.** The content `PUT` streams a consumed, tqdm-wrapped file
   handle that `urllib3` cannot replay, so wrap `upload_file` in a `tenacity`
   retry that re-opens the file and resets the progress bar per attempt. See
@@ -643,7 +647,40 @@ New `openscm_zenodo/exceptions.py`:
 
 ---
 
-## Part 3 — Two file-writing methods: `upload_files` and `mirror_files`
+## Part 3 — Two file-writing methods: `upload_files` and `mirror_files` — ✅ IMPLEMENTED
+
+**Done.** `list_files`, `upload_files`, `mirror_files`, `delete_files`,
+`delete_all_files` and the shared `_diff_files`, with unit tests and live sandbox
+tests (`tests/integration/test_upload_files_integration.py`). Deltas from the text
+below, all deliberate:
+
+- **Deletes are serial, and there is no `n_threads` on them.** Found by the live
+  test: deleting in parallel makes Zenodo reject some deletes with
+  `400 Not a valid value` and the files stay put. `mirror_files` still takes
+  `n_threads`, but it only applies to the uploads.
+- **`list_files` returns `dict[str, FileEntry]`, not `dict[str, str]`.** The plan
+  wanted name→md5 here and name→size in Part 5; one type serves both, and
+  `FileEntry.md5` gives the diff what it needs.
+- **No `verify_checksum` on `upload_files`/`mirror_files`.** Working out what to
+  upload needs each local checksum anyway, so checking it afterwards is free —
+  the flag would only remove a safety net in exchange for nothing. `upload_file`
+  keeps it (there the hash is a real extra read) and gained `local_md5=` so the
+  plural methods can hand over the checksum they already computed, rather than
+  the file being hashed twice.
+- **Both return the draft's files after the call** (`dict[str, FileEntry]`),
+  derived from the listing plus what was uploaded, with no extra request.
+- **The progress-bar position allocator** (2.1) landed here rather than in Part 2,
+  since this is where parallelism arrives: `PositionAllocator` hands each worker a
+  line and takes it back when the file finishes. Running out of lines raises,
+  rather than falling back to letting tqdm choose: it cannot happen when `n_slots`
+  matches the number of workers, so it would only ever mean the two had been wired
+  up wrongly. `tqdm.set_lock()` is *not* called
+  — tqdm's default write lock already covers threads, so setting our own would be
+  redundant.
+- **Basename collisions** (`DuplicateFileKeyError`) are still Part 11; today two
+  paths with the same name silently collapse to one.
+
+
 
 There is no `sync_files` and no `delete_extraneous` flag. The ambiguity of "sync"
 is not fixed by documenting the flag — it is fixed by never making the caller

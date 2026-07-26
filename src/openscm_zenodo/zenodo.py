@@ -10,7 +10,7 @@ import logging
 import os
 import os.path
 import urllib.parse
-from collections.abc import Collection, Iterable, Mapping
+from collections.abc import Callable, Collection, Iterable, Mapping
 from enum import Enum, auto
 from pathlib import Path
 from types import TracebackType
@@ -20,6 +20,7 @@ from typing import (
     NewType,
     NoReturn,
     TypeAlias,
+    TypeVar,
     cast,
     overload,
 )
@@ -53,9 +54,14 @@ from openscm_zenodo.exceptions import (
 )
 from openscm_zenodo.logging import mask_token
 from openscm_zenodo.progress import (
+    PositionAllocator,
     get_file_progress_bar,
+    get_files_progress_bar,
     get_progress_reading_wrapper,
 )
+
+_T = TypeVar("_T")
+_R = TypeVar("_R")
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -554,6 +560,86 @@ class FileEntry:
             MD5 checksum of the file
         """
         return get_md5_from_checksum(self.checksum)
+
+
+@define
+class FileDiff:
+    """
+    The difference between a set of local files and a record's files
+    """
+
+    to_upload: dict[Path, str]
+    """
+    Files which are not on the record, or are there with different contents
+
+    Maps each file to its local MD5 checksum,
+    which we have already calculated in order to make the comparison,
+    so the upload does not have to calculate it again.
+    """
+
+    unchanged: tuple[Path, ...]
+    """Files which are already on the record with the same contents"""
+
+    to_delete: tuple[str, ...]
+    """Names of files which are on the record but not in the local set"""
+
+    remote: dict[str, FileEntry] = field(repr=False)
+    """The record's files, as they were before any of this is acted on"""
+
+
+def _run_in_parallel(
+    func: Callable[[_T], _R],
+    items: Collection[_T],
+    *,
+    n_threads: int,
+    desc: str,
+    progress: bool = True,
+) -> list[_R]:
+    """
+    Apply `func` to every item, in parallel, showing progress as they complete
+
+    Parameters
+    ----------
+    func
+        Function to apply
+
+    items
+        Items to apply `func` to
+
+    n_threads
+        Number of threads to use
+
+    desc
+        Description of the operation, shown on the progress bar
+
+    progress
+        Should a progress bar be shown?
+
+    Returns
+    -------
+    :
+        The results, in the order of `items`
+
+    Raises
+    ------
+    Exception
+        Whatever `func` raised.
+
+        Every item is attempted before we raise,
+        so a single failure part way through does not abandon the rest,
+        and the failure that is raised is the first one in `items` order.
+    """
+    with (
+        get_files_progress_bar(desc=desc, total=len(items), progress=progress) as bar,
+        concurrent.futures.ThreadPoolExecutor(max_workers=n_threads) as executor,
+    ):
+        futures = [executor.submit(func, item) for item in items]
+
+        for _ in concurrent.futures.as_completed(futures):
+            bar.update(1)
+
+    # Now that everything has finished, surface the first failure, if there was one
+    return [future.result() for future in futures]
 
 
 def should_retry_upload(
@@ -1189,6 +1275,7 @@ class ZenodoClient:
         path: Path,
         *,
         verify_checksum: bool = True,
+        local_md5: str | None = None,
         progress: bool = True,
         position: int | None = None,
         max_attempts: int = 5,
@@ -1222,8 +1309,15 @@ class ZenodoClient:
 
             We compare the file's local MD5 checksum
             against the checksum Zenodo reports when the file is committed.
-            This costs one extra read of the file, so it can be turned off,
+            Unless `local_md5` is supplied,
+            this costs one extra read of the file, so it can be turned off,
             but a corrupted upload is worse than a slow one.
+
+        local_md5
+            MD5 checksum of `path`, if you have already calculated it.
+
+            Only used when `verify_checksum` is `True`,
+            in which case supplying it saves us reading the file again.
 
         progress
             Should a progress bar be shown?
@@ -1259,7 +1353,11 @@ class ZenodoClient:
         filename = path.name
         logger.info(f"Uploading {path} as {filename!r} to record {record_id!r}")
 
-        local_md5 = get_file_md5(path) if verify_checksum else None
+        local_md5_to_check = None
+        if verify_checksum:
+            local_md5_to_check = (
+                local_md5 if local_md5 is not None else get_file_md5(path)
+            )
 
         retrying = Retrying(
             retry=retry_if_exception(should_retry_upload),
@@ -1275,7 +1373,7 @@ class ZenodoClient:
                 record_id,
                 path,
                 filename=filename,
-                local_md5=local_md5,
+                local_md5=local_md5_to_check,
                 progress=progress,
                 position=position,
             )
@@ -1288,6 +1386,352 @@ class ZenodoClient:
         logger.info(f"Successfully uploaded {path} as {filename!r}")
 
         return entry
+
+    def list_files(
+        self, record_id: str | RecordID, *, draft: bool = True
+    ) -> dict[str, FileEntry]:
+        """
+        List the files on a record
+
+        Parameters
+        ----------
+        record_id
+            ID of the record whose files to list
+
+        draft
+            Should we list the record's draft's files,
+            rather than the published record's?
+
+            The default, `True`, is the draft,
+            because that is what the file-writing methods work on.
+
+            [Would this be better worded as simply,
+            "Whether `record_id` refers to a draft of published record?"]
+
+        Returns
+        -------
+        :
+            The record's files, keyed by their name on Zenodo
+        """
+        part = "/draft/files" if draft else "/files"
+        response = self._request(
+            f"/api/records/{record_id}{part}",
+            requires_auth=draft,
+            description=f"list the files on record {record_id!r}",
+        )
+
+        entries = cast(list[dict[str, Any]], response.json()["entries"])
+
+        return {entry["key"]: FileEntry.from_json(entry) for entry in entries}
+
+    def _diff_files(
+        self, record_id: str | RecordID, paths: Collection[Path]
+    ) -> FileDiff:
+        """
+        Work out what has to change for a record's files to match `paths`
+
+        Zenodo reports each file's checksum in the listing,
+        so we can do this without downloading anything.
+
+        Parameters
+        ----------
+        record_id
+            ID of the record whose files to compare against
+
+        paths
+            Local files to compare
+
+        Returns
+        -------
+        :
+            The difference between `paths` and the record's files
+        """
+        remote = self.list_files(record_id)
+        # Zenodo has no directories, so a local file's name is its name on Zenodo
+        want = {path.name: path for path in paths}
+
+        to_upload = {}
+        unchanged = []
+        for name, path in want.items():
+            entry = remote.get(name)
+            local_md5 = get_file_md5(path)
+
+            if entry is not None and entry.md5 == local_md5:
+                unchanged.append(path)
+
+            else:
+                to_upload[path] = local_md5
+
+        return FileDiff(
+            to_upload=to_upload,
+            unchanged=tuple(unchanged),
+            to_delete=tuple(name for name in remote if name not in want),
+            remote=remote,
+        )
+
+    def _upload_diff(
+        self,
+        record_id: str | RecordID,
+        diff: FileDiff,
+        *,
+        n_threads: int,
+        progress: bool,
+        max_attempts: int,
+    ) -> dict[str, FileEntry]:
+        """
+        Upload the files a diff says need uploading
+
+        Parameters
+        ----------
+        record_id
+            ID of the record whose draft to upload to
+
+        diff
+            Difference to act on
+
+        n_threads
+            Number of files to upload at once
+
+        progress
+            Should progress bars be shown?
+
+        max_attempts
+            Maximum number of times to try each upload before giving up
+
+        Returns
+        -------
+        :
+            The uploaded files' entries, keyed by their name on Zenodo
+        """
+        if not diff.to_upload:
+            return {}
+
+        positions = PositionAllocator(n_slots=n_threads)
+
+        def upload_one(path: Path) -> FileEntry:
+            with positions.slot() as position:
+                return self.upload_file(
+                    record_id,
+                    path,
+                    local_md5=diff.to_upload[path],
+                    progress=progress,
+                    position=position,
+                    max_attempts=max_attempts,
+                )
+
+        entries = _run_in_parallel(
+            upload_one,
+            list(diff.to_upload),
+            n_threads=n_threads,
+            desc="Uploading",
+            progress=progress,
+        )
+
+        return {entry.key: entry for entry in entries}
+
+    def upload_files(
+        self,
+        record_id: str | RecordID,
+        paths: Collection[Path],
+        *,
+        n_threads: int = 4,
+        progress: bool = True,
+        max_attempts: int = 5,
+    ) -> dict[str, FileEntry]:
+        """
+        Add files to a record
+
+        This never deletes anything.
+        Files which are already on the draft with the same contents
+        are left alone rather than being uploaded again,
+        so re-running after a failure part way through is cheap.
+        If you want the draft to end up containing exactly `paths`,
+        use [`mirror_files`][openscm_zenodo.zenodo.ZenodoClient.mirror_files].
+
+        Note that Zenodo has no directories:
+        each file lands under its own name,
+        whatever local directories it sits in.
+
+        Parameters
+        ----------
+        record_id
+            ID of the record whose draft to upload to
+
+        paths
+            Files to upload
+
+        n_threads
+            Number of files to upload at once
+
+        progress
+            Should progress bars be shown?
+
+        max_attempts
+            Maximum number of times to try each upload before giving up
+
+        Returns
+        -------
+        :
+            The draft's files once we are done, keyed by their name on Zenodo
+
+        Notes
+        -----
+        There is no `verify_checksum` argument here, unlike
+        [`upload_file`][openscm_zenodo.zenodo.ZenodoClient.upload_file].
+        Working out what to upload requires each file's local checksum anyway,
+        so checking it against Zenodo's reported checksum afterwards is free.
+        Turning that off would remove a safety net and save nothing.
+        """
+        diff = self._diff_files(record_id, paths)
+
+        logger.info(
+            f"Uploading {len(diff.to_upload)} file(s) to record {record_id!r}, "
+            f"leaving {len(diff.unchanged)} unchanged file(s) alone"
+        )
+
+        uploaded = self._upload_diff(
+            record_id,
+            diff,
+            n_threads=n_threads,
+            progress=progress,
+            max_attempts=max_attempts,
+        )
+
+        return {**diff.remote, **uploaded}
+
+    def mirror_files(
+        self,
+        record_id: str | RecordID,
+        paths: Collection[Path],
+        *,
+        n_threads: int = 4,
+        progress: bool = True,
+        max_attempts: int = 5,
+    ) -> dict[str, FileEntry]:
+        """
+        Make a record contain exactly `paths`
+
+        **This deletes files.**
+        Anything on the draft which is not in `paths` is removed.
+        Files which are already there with the same contents are left alone.
+        If you only want to add files, use
+        [`upload_files`][openscm_zenodo.zenodo.ZenodoClient.upload_files].
+
+        Parameters
+        ----------
+        record_id
+            ID of the record whose draft to mirror `paths` onto
+
+        paths
+            Files the draft should end up containing
+
+        n_threads
+            Number of files to upload at once.
+
+            This does not apply to the deletes, which Zenodo can only do
+            one at a time, see
+            [`delete_files`][openscm_zenodo.zenodo.ZenodoClient.delete_files].
+
+        progress
+            Should progress bars be shown?
+
+        max_attempts
+            Maximum number of times to try each upload before giving up
+
+        Returns
+        -------
+        :
+            The draft's files once we are done, keyed by their name on Zenodo
+        """
+        diff = self._diff_files(record_id, paths)
+
+        logger.info(
+            f"Mirroring {len(paths)} file(s) onto record {record_id!r}: "
+            f"uploading {len(diff.to_upload)}, "
+            f"deleting {len(diff.to_delete)}, "
+            f"leaving {len(diff.unchanged)} unchanged"
+        )
+
+        # Delete before uploading, so that renaming a large file
+        # does not need room for both copies at once
+        if diff.to_delete:
+            self.delete_files(record_id, diff.to_delete, progress=progress)
+
+        uploaded = self._upload_diff(
+            record_id,
+            diff,
+            n_threads=n_threads,
+            progress=progress,
+            max_attempts=max_attempts,
+        )
+
+        kept = {
+            name: entry
+            for name, entry in diff.remote.items()
+            if name not in diff.to_delete
+        }
+
+        return {**kept, **uploaded}
+
+    def delete_files(
+        self,
+        record_id: str | RecordID,
+        filenames: Collection[str],
+        *,
+        progress: bool = True,
+    ) -> None:
+        """
+        Delete files from a record, by name
+
+        Files are deleted one at a time, deliberately.
+        Deleting in parallel does not work:
+        each delete updates the draft's list of files,
+        concurrent deletes race with each other,
+        and Zenodo rejects the ones which lose
+        with `400 Not a valid value`, leaving those files in place.
+        Uploading in parallel is fine, see
+        [`upload_files`][openscm_zenodo.zenodo.ZenodoClient.upload_files].
+
+        Parameters
+        ----------
+        record_id
+            ID of the record whose draft to delete from
+
+        filenames
+            Names of the files to delete, as they appear on Zenodo
+
+        progress
+            Should a progress bar be shown?
+        """
+        if not filenames:
+            return
+
+        logger.info(f"Deleting {len(filenames)} file(s) from record {record_id!r}")
+
+        with get_files_progress_bar(
+            desc="Deleting", total=len(filenames), progress=progress
+        ) as progress_bar:
+            for filename in filenames:
+                self.delete_file(record_id, filename)
+                progress_bar.update(1)
+
+    def delete_all_files(
+        self, record_id: str | RecordID, *, progress: bool = True
+    ) -> None:
+        """
+        Delete every file from a record's draft
+
+        Parameters
+        ----------
+        record_id
+            ID of the record whose draft to empty
+
+        progress
+            Should a progress bar be shown?
+        """
+        self.delete_files(
+            record_id, tuple(self.list_files(record_id)), progress=progress
+        )
 
 
 @define

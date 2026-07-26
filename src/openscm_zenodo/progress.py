@@ -5,10 +5,14 @@ Progress bars for file transfers
 from __future__ import annotations
 
 import sys
+import threading
+from collections.abc import Iterator
+from contextlib import contextmanager
 from typing import Any
 
 import tqdm
 import tqdm.utils
+from attrs import define, field
 
 TQDM_FILE_PROGRESS_KWARGS_DEFAULT: dict[str, Any] = dict(
     unit="B",
@@ -128,3 +132,135 @@ def get_progress_reading_wrapper(file_handle: Any, progress_bar: tqdm.tqdm[Any])
         The wrapped file handle.
     """
     return tqdm.utils.CallbackIOWrapper(progress_bar.update, file_handle, "read")
+
+
+def get_files_progress_bar(
+    *,
+    desc: str,
+    total: int,
+    progress: bool = True,
+    position: int = 0,
+    **kwargs: Any,
+) -> tqdm.tqdm[Any]:
+    """
+    Get a progress bar which counts files, rather than bytes
+
+    This is the overall bar for an operation on many files.
+    The per-file bars sit above it, see
+    [`get_file_progress_bar`][openscm_zenodo.progress.get_file_progress_bar].
+
+    Parameters
+    ----------
+    desc
+        Description of the operation
+
+    total
+        Total number of files
+
+    progress
+        Should a progress bar be shown?
+
+        As with the per-file bars, `True` lets `tqdm` silence itself
+        when `stderr` is not a terminal.
+
+    position
+        Line to display the bar on.
+
+        The default, `0`, keeps it below the per-file bars.
+
+    **kwargs
+        Passed to [`tqdm.tqdm`][tqdm.tqdm]
+
+    Returns
+    -------
+    :
+        The progress bar
+    """
+    tqdm_kwargs: dict[str, Any] = {
+        "unit": "file",
+        # Erased when the operation finishes, so the terminal is left clean
+        "leave": False,
+        "dynamic_ncols": True,
+        "disable": None if progress else True,
+        "desc": desc,
+        "total": total,
+        "position": position,
+        **kwargs,
+    }
+
+    return tqdm.tqdm(**tqdm_kwargs)
+
+
+@define
+class PositionAllocator:
+    """
+    Hands out progress bar lines to parallel workers
+
+    Without this, every worker's bar draws on the same line
+    and they overwrite each other.
+    Slots are recycled as files complete,
+    so `n_slots` lines are used no matter how many files there are.
+    """
+
+    n_slots: int
+    """Number of slots to hand out, i.e. the number of workers"""
+
+    first_slot: int = 1
+    """
+    Line of the first slot
+
+    The default leaves line zero for the overall files bar.
+    """
+
+    _free: list[int] = field(init=False, factory=list)
+    """Slots which are not currently in use"""
+
+    _lock: threading.Lock = field(init=False, factory=threading.Lock, repr=False)
+    """Guards `_free`, which workers take from and give back to"""
+
+    def __attrs_post_init__(self) -> None:
+        """
+        Finish initialisation
+
+        Every slot starts out free.
+        """
+        self._free.extend(range(self.first_slot, self.first_slot + self.n_slots))
+
+    @contextmanager
+    def slot(self) -> Iterator[int]:
+        """
+        Take a slot for as long as the context is open, then give it back
+
+        Yields
+        ------
+        :
+            The line to draw on
+
+        Raises
+        ------
+        RuntimeError
+            There are no slots left.
+
+            This cannot happen if `n_slots` matches the number of workers,
+            so it means the two have been wired up incorrectly.
+        """
+        with self._lock:
+            if not self._free:
+                msg = (
+                    f"No progress bar slots left. "
+                    f"{self.n_slots} slot(s) were created, "
+                    "and all of them are in use, "
+                    "which means more workers are running than there are slots. "
+                    "`n_slots` must match the number of workers."
+                )
+
+                raise RuntimeError(msg)
+
+            position = self._free.pop(0)
+
+        try:
+            yield position
+
+        finally:
+            with self._lock:
+                self._free.append(position)
