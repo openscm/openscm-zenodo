@@ -65,6 +65,16 @@ def test_exceptions_derive_from_zenodo_error(exp_subclass_of_zenodo_error):
             '["not", "a", "dict"]',
             id="body-is-not-a-dict",
         ),
+        pytest.param(
+            {"message": "Boom.", "errors": "not a list"},
+            "Boom.\n- not a list",
+            id="errors-is-not-a-list",
+        ),
+        pytest.param(
+            {"message": "Boom.", "errors": {"field": "a", "messages": ["bad"]}},
+            "Boom.\n- a: bad",
+            id="errors-is-a-bare-dict",
+        ),
     ),
 )
 def test_format_error_body(json_body, exp, make_response):

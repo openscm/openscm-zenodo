@@ -11,6 +11,7 @@ import pytest
 from openscm_zenodo.exceptions import MissingTokenError
 from openscm_zenodo.zenodo import (
     ZenodoDomain,
+    get_token_env_vars,
     get_zenodo_domain_url,
     load_env_file,
     resolve_token,
@@ -116,20 +117,49 @@ def test_resolve_token_required_raises():
         resolve_token(None, env={}, required=True, description="do the thing")
 
     msg = str(exc_info.value)
-    # The error should explain the entire chain,
-    # so it can be fixed without reading the docs.
+    # The error should say what we were doing, where, and what we checked,
+    # so it can be fixed without reading the docs
     assert "do the thing" in msg
-    assert "ZENODO_SANDBOX_TOKEN" in msg
-    assert "ZENODO_TOKEN" in msg
-    assert ".env" in msg
     assert "https://zenodo.org" in msg
+    assert "$ZENODO_TOKEN is not set" in msg
+    # The sandbox variable is not consulted for production,
+    # so mentioning it would be a lie
+    assert "ZENODO_SANDBOX_TOKEN" not in msg
 
 
 def test_resolve_token_required_raises_names_the_domain():
     with pytest.raises(MissingTokenError) as exc_info:
         resolve_token(None, env={}, required=True, zenodo_domain=ZenodoDomain.sandbox)
 
-    assert "https://sandbox.zenodo.org" in str(exc_info.value)
+    msg = str(exc_info.value)
+    assert "https://sandbox.zenodo.org" in msg
+    assert "$ZENODO_SANDBOX_TOKEN is not set" in msg
+    assert "$ZENODO_TOKEN is not set" in msg
+
+
+def test_resolve_token_required_raises_reports_what_was_checked():
+    """
+    The message lists the variables we actually checked, in the order we checked them
+
+    Those come from `get_token_env_vars`, the same function that drives the lookup,
+    so the message cannot drift away from the behaviour.
+    """
+    with pytest.raises(MissingTokenError) as exc_info:
+        resolve_token(None, env={}, required=True, zenodo_domain=ZenodoDomain.sandbox)
+
+    assert exc_info.value.env_vars == get_token_env_vars(ZenodoDomain.sandbox)
+
+
+@pytest.mark.parametrize(
+    "zenodo_domain, exp",
+    (
+        (ZenodoDomain.production, ("ZENODO_TOKEN",)),
+        (ZenodoDomain.sandbox, ("ZENODO_SANDBOX_TOKEN", "ZENODO_TOKEN")),
+        ("https://sandbox.zenodo.org/", ("ZENODO_SANDBOX_TOKEN", "ZENODO_TOKEN")),
+    ),
+)
+def test_get_token_env_vars(zenodo_domain, exp):
+    assert get_token_env_vars(zenodo_domain) == exp
 
 
 @pytest.mark.parametrize(

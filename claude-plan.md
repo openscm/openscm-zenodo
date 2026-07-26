@@ -463,6 +463,16 @@ Deltas from the text below, all deliberate:
   committed file's content cannot be replaced and a pending one cannot be resumed,
   so each attempt deletes and re-initialises. That also gives re-uploads and
   recovery from a half-finished upload for free.
+- **Uploads return a `FileEntry`**, not a raw `dict`. It models `key`, `size`,
+  `checksum` and `status`, exposes the parsed `md5`, and keeps the rest of
+  Zenodo's response (timestamps, mime type, internal IDs, links) in `raw` rather
+  than growing a field each time one turns out to be useful. `list_files`
+  (Part 3) should return these too.
+- **`MissingTokenError` is told which environment variables were checked**
+  rather than hard-coding the precedence chain in its message. The variables come
+  from `get_token_env_vars`, the same function that drives the lookup, so the
+  message cannot drift — and it is now correct about the sandbox variable only
+  applying to the sandbox.
 - **`--sync`-style flags and parallelism are not here** — `upload_files`,
   `list_files` and `mirror_files` are Part 3, along with the progress-bar
   `position` slot allocator (the parameter exists, nothing allocates slots yet).

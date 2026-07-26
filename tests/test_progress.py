@@ -10,7 +10,6 @@ import pytest
 import tqdm as tqdm_module
 
 from openscm_zenodo.progress import (
-    DESC_MAX_LENGTH,
     get_file_progress_bar,
     get_progress_reading_wrapper,
 )
@@ -58,9 +57,9 @@ def test_get_file_progress_bar_position(captured_kwargs):
 def test_get_file_progress_bar_truncates_the_description(captured_kwargs):
     desc = "a-very-long-file-name-" * 10
 
-    get_file_progress_bar(desc=desc, total=1)
+    get_file_progress_bar(desc=desc, total=1, desc_max_length=12)
 
-    assert captured_kwargs["desc"] == desc[:DESC_MAX_LENGTH]
+    assert captured_kwargs["desc"] == desc[:12]
 
 
 def test_get_file_progress_bar_kwargs_win(captured_kwargs):

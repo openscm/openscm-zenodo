@@ -40,7 +40,11 @@ from tenacity import (
 )
 from urllib3.util.retry import Retry
 
-from openscm_zenodo.checksums import assert_md5_matches, get_file_md5
+from openscm_zenodo.checksums import (
+    assert_md5_matches,
+    get_file_md5,
+    get_md5_from_checksum,
+)
 from openscm_zenodo.exceptions import (
     ChecksumMismatchError,
     MissingTokenError,
@@ -163,6 +167,39 @@ def get_zenodo_domain_url(zenodo_domain: str | ZenodoDomain) -> str:
     return zenodo_domain.rstrip("/")
 
 
+def get_token_env_vars(
+    zenodo_domain: str | ZenodoDomain = ZenodoDomain.production,
+) -> tuple[str, ...]:
+    """
+    Get the environment variables we read a token from, in order of precedence
+
+    Parameters
+    ----------
+    zenodo_domain
+        Zenodo domain that the token will be used with
+
+    Returns
+    -------
+    :
+        Environment variables to check, highest precedence first
+
+    Examples
+    --------
+    >>> get_token_env_vars(ZenodoDomain.production)
+    ('ZENODO_TOKEN',)
+
+    Sandbox and production tokens are not interchangeable,
+    so the sandbox variable is only in play when talking to the sandbox
+
+    >>> get_token_env_vars(ZenodoDomain.sandbox)
+    ('ZENODO_SANDBOX_TOKEN', 'ZENODO_TOKEN')
+    """
+    if get_zenodo_domain_url(zenodo_domain) == ZenodoDomain.sandbox.value:
+        return (ZENODO_SANDBOX_TOKEN_ENV_VAR, ZENODO_TOKEN_ENV_VAR)
+
+    return (ZENODO_TOKEN_ENV_VAR,)
+
+
 @overload
 def resolve_token(
     token: str | None = ...,
@@ -282,6 +319,9 @@ def resolve_token(
     ...
     openscm_zenodo.exceptions.MissingTokenError
     """
+    zenodo_domain_url = get_zenodo_domain_url(zenodo_domain)
+    env_vars = get_token_env_vars(zenodo_domain)
+
     resolved = None
 
     if token:
@@ -292,24 +332,21 @@ def resolve_token(
         if env is None:
             env = os.environ
 
-        if get_zenodo_domain_url(zenodo_domain) == ZenodoDomain.sandbox.value:
-            sandbox_token = env.get(ZENODO_SANDBOX_TOKEN_ENV_VAR)
-            if sandbox_token:
-                logger.debug(f"Using the token from ${ZENODO_SANDBOX_TOKEN_ENV_VAR}")
-                resolved = sandbox_token
-
-        if resolved is None:
-            zenodo_token = env.get(ZENODO_TOKEN_ENV_VAR)
-            if zenodo_token:
-                logger.debug(f"Using the token from ${ZENODO_TOKEN_ENV_VAR}")
-                resolved = zenodo_token
+        for env_var in env_vars:
+            env_token = env.get(env_var)
+            if env_token:
+                logger.debug(f"Using the token from ${env_var}")
+                resolved = env_token
+                break
 
     if resolved is None:
         logger.debug("No Zenodo token could be resolved")
 
         if required:
             raise MissingTokenError(
-                description, zenodo_domain=get_zenodo_domain_url(zenodo_domain)
+                description,
+                zenodo_domain=zenodo_domain_url,
+                env_vars=env_vars,
             )
 
     return resolved
@@ -449,6 +486,76 @@ def build_session(
     return session
 
 
+@define
+class FileEntry:
+    """
+    A file which is on a record as Zenodo describes it
+    """
+
+    key: str
+    """Name of the file, as it appears on Zenodo"""
+
+    size: int
+    """Size of the file in bytes"""
+
+    checksum: str
+    """Checksum of the file, as Zenodo reports it, i.e. `"md5:<hex>"`"""
+
+    status: str
+    """
+    Status of the file
+
+    `"completed"` once the file has been committed,
+    `"pending"` while it is still being uploaded.
+    A draft which has a pending file on it cannot be published.
+    """
+
+    raw: dict[str, Any] = field(repr=False)
+    """
+    Everything Zenodo sent about the file
+
+    Zenodo reports more than we model here
+    (timestamps, mime type, storage class, internal IDs and links).
+    Rather than grow a field every time one of them turns out to be useful,
+    they are kept here.
+    """
+
+    @classmethod
+    def from_json(cls, raw: dict[str, Any]) -> FileEntry:
+        """
+        Initialise from Zenodo's description of a file
+
+        Parameters
+        ----------
+        raw
+            Zenodo's description of the file
+
+        Returns
+        -------
+        :
+            Initialised `FileEntry`
+        """
+        return cls(
+            key=raw["key"],
+            size=raw["size"],
+            checksum=raw["checksum"],
+            status=raw["status"],
+            raw=raw,
+        )
+
+    @property
+    def md5(self) -> str:
+        """
+        MD5 checksum of the file, as a hex string
+
+        Returns
+        -------
+        :
+            MD5 checksum of the file
+        """
+        return get_md5_from_checksum(self.checksum)
+
+
 def should_retry_upload(
     exc: BaseException,
     *,
@@ -480,13 +587,7 @@ def should_retry_upload(
         # (e.g. retrying a rejected upload four more times helps no one).
         return exc.response.status_code in retry_status_forcelist
 
-    # Please clarify what this means: it can be retried,
-    # but only if the exception is a request exception?
-    # If it isn't, the retry has to be handled elsewhere
-    # so that the file handle is replayed correctly?
-    # Connection errors, read timeouts and the like.
-    # The session's retries cannot cover the content request,
-    # because its body is a file handle which cannot be replayed.
+    # Only worth retrying connection errors.
     return isinstance(exc, requests.exceptions.RequestException)
 
 
@@ -499,16 +600,22 @@ def _log_upload_retry(retry_state: RetryCallState) -> None:
     retry_state
         State of the retrying, as tenacity reports it
     """
+    # tenacity only calls this when it is about to sleep and try again,
+    # so there is always an outcome and a next action.
+    # The `None` handling below is only here to satisfy the type checkers,
+    # and deliberately does not claim a sleep time it does not have.
     exc = retry_state.outcome.exception() if retry_state.outcome is not None else None
-    sleep = (
-        retry_state.next_action.sleep if retry_state.next_action is not None else 0.0
+
+    next_action = retry_state.next_action
+    trying_again = (
+        "Trying again."
+        if next_action is None
+        else f"Trying again in {next_action.sleep:.1f}s."
     )
 
     logger.warning(
         f"Upload attempt {retry_state.attempt_number} failed with {exc!r}. "
-        # Does it make sense to report trying again in 0.0s?
-        # Doesn't next_action being None indicate that there will be no retry?
-        f"Trying again in {sleep:.1f}s."
+        f"{trying_again}"
     )
 
 
@@ -697,7 +804,9 @@ class ZenodoClient:
         unauthorised = (401, 403)
         if response.status_code in unauthorised and not self.token:
             raise MissingTokenError(
-                description, zenodo_domain=self.zenodo_domain_url
+                description,
+                zenodo_domain=self.zenodo_domain_url,
+                env_vars=get_token_env_vars(self.zenodo_domain),
             ) from error
 
         raise error
@@ -777,7 +886,11 @@ class ZenodoClient:
             request_headers["Authorization"] = f"Bearer {self.token}"
 
         elif requires_auth:
-            raise MissingTokenError(description, zenodo_domain=self.zenodo_domain_url)
+            raise MissingTokenError(
+                description,
+                zenodo_domain=self.zenodo_domain_url,
+                env_vars=get_token_env_vars(self.zenodo_domain),
+            )
 
         if self.session is None:
             msg = (
@@ -838,8 +951,8 @@ class ZenodoClient:
         """
         Delete a file from a record
 
-        The record must be, by definition a draft,
-        you can't delete from published records.
+        The record must be, by definition, a draft
+        (you can't delete from published records).
 
         Parameters
         ----------
@@ -861,7 +974,7 @@ class ZenodoClient:
         """
         Initialise a file on a record (by definition a draft)
 
-        This is the the first step of an upload.
+        This is the first step of an upload.
 
         If `filename` is already on the draft, we delete it and start again.
         That covers both re-uploading a file which has changed
@@ -879,7 +992,7 @@ class ZenodoClient:
         path = f"/api/records/{record_id}/draft/files"
         description = f"initialise {filename!r} on record {record_id!r}"
 
-        def initialise_file():
+        def initialise_file() -> None:
             self._request(
                 path,
                 method="POST",
@@ -946,10 +1059,10 @@ class ZenodoClient:
                     data=get_progress_reading_wrapper(file_handle, progress_bar),
                     headers={"Content-Type": "application/octet-stream"},
                     timeout=self.timeout_upload,
-                    description=(f"upload {filename!r} to record {record_id!r}"),
+                    description=f"upload {filename!r} to record {record_id!r}",
                 )
 
-    def _commit_file(self, record_id: str, filename: str) -> dict[str, Any]:
+    def _commit_file(self, record_id: str, filename: str) -> FileEntry:
         """
         Commit a file, the third and final step of an upload
 
@@ -976,7 +1089,7 @@ class ZenodoClient:
             description=f"commit {filename!r} to record {record_id!r}",
         )
 
-        return cast(dict[str, Any], response.json())
+        return FileEntry.from_json(cast(dict[str, Any], response.json()))
 
     def _upload_file_attempt(  # noqa: PLR0913
         self,
@@ -984,14 +1097,10 @@ class ZenodoClient:
         path: Path,
         *,
         filename: str,
-        # Is there a reason to not make this required
-        # i.e. not always check against the local checksum?
         local_md5: str | None,
         progress: bool,
         position: int | None,
-        # Can we introduce a more helpful return type
-        # rather than the loose dict[str, Any] we currently have?
-    ) -> dict[str, Any]:
+    ) -> FileEntry:
         """
         Make one attempt at uploading a file
 
@@ -1042,7 +1151,7 @@ class ZenodoClient:
 
         if local_md5 is not None:
             assert_md5_matches(
-                filename, local_md5=local_md5, remote_checksum=entry["checksum"]
+                filename, local_md5=local_md5, remote_checksum=entry.checksum
             )
 
         return entry
@@ -1083,8 +1192,7 @@ class ZenodoClient:
         progress: bool = True,
         position: int | None = None,
         max_attempts: int = 5,
-        # As above, can we introduce a better type here?
-    ) -> dict[str, Any]:
+    ) -> FileEntry:
         """
         Upload a file to a record's draft
 
@@ -1149,9 +1257,7 @@ class ZenodoClient:
             Zenodo rejected the upload
         """
         filename = path.name
-        logger.info(
-            f"Uploading {path} as {filename!r} to the draft of record {record_id!r}"
-        )
+        logger.info(f"Uploading {path} as {filename!r} to record {record_id!r}")
 
         local_md5 = get_file_md5(path) if verify_checksum else None
 

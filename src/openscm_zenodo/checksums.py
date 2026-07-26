@@ -28,7 +28,7 @@ def get_file_md5(
     Enable `DEBUG` logging
     (see [`setup_logging`][openscm_zenodo.logging.setup_logging])
     to see the timing of every hash.
-    Hashes which take longer than `slow_threshold_s` are reported at `INFO` level.
+    Hashes which take longer than `slow_threshold_s` are reported at `INFO` level
     so they can be reported without small file reporting making the logs very noisy.
 
     Parameters

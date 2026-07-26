@@ -32,7 +32,13 @@ class MissingTokenError(ZenodoError):
     so the fix is discoverable from the error alone.
     """
 
-    def __init__(self, description: str, *, zenodo_domain: str) -> None:
+    def __init__(
+        self,
+        description: str,
+        *,
+        zenodo_domain: str,
+        env_vars: tuple[str, ...] = (),
+    ) -> None:
         """
         Initialise
 
@@ -47,30 +53,34 @@ class MissingTokenError(ZenodoError):
 
         zenodo_domain
             The Zenodo domain that was being interacted with.
+
+        env_vars
+            Environment variables that were checked for a token,
+            in the order they were checked.
+
+            These are supplied by the caller rather than listed here
+            so that the message cannot drift away from what we actually did.
         """
         self.description = description
         self.zenodo_domain = zenodo_domain
+        self.env_vars = env_vars
 
-        msg = "\n".join(
-            [
-                f"A Zenodo token is required to {description}, "
-                "but no token could be resolved.",
-                # Is having this information in an error message like this a good idea,
-                # or is it just prone to drift and being wrong over time?
-                # As an alternative, we could simply delete everything in this error message from here below.
-                "Tokens are looked for in the following places, "
-                "highest precedence first:",
-                "1. the `token` argument to `ZenodoClient` "
-                "(`--token` on the command-line)",
-                "2. the `ZENODO_SANDBOX_TOKEN` environment variable "
-                "(only used with https://sandbox.zenodo.org)",
-                "3. the `ZENODO_TOKEN` environment variable",
-                "4. a `.env` file (command-line only, see `--env-file`)",
-                f"The domain being used is {zenodo_domain}.",
-                "For how to create a token, see the "
-                "'Creating a personal access token' header of "
-                "https://developers.zenodo.org/#authentication",
-            ]
+        looked_in = ["no token was supplied"]
+        looked_in.extend(f"${env_var} is not set" for env_var in env_vars)
+
+        if len(looked_in) > 1:
+            looked_in_formatted = f"{', '.join(looked_in[:-1])} and {looked_in[-1]}"
+
+        else:
+            looked_in_formatted = looked_in[0]
+
+        msg = (
+            f"A Zenodo token is required to {description}, "
+            f"but no token could be resolved for {zenodo_domain}: "
+            f"{looked_in_formatted}. "
+            "For how to create a token, see the "
+            "'Creating a personal access token' header of "
+            "https://developers.zenodo.org/#authentication"
         )
 
         super().__init__(msg)
@@ -193,10 +203,12 @@ def format_error_body(response: requests.models.Response) -> str:
         lines.append(str(message))
 
     errors: Any = body.get("errors") or []
-    if isinstance(errors, list):
-        for error in errors:
-            lines.append(f"- {format_field_error(error)}")
-    # What happens if errors is not a list?
+    # Zenodo sends a list, but if it ever sends something else
+    # we would rather show it than silently drop it
+    if not isinstance(errors, list):
+        errors = [errors]
+
+    lines.extend(f"- {format_field_error(error)}" for error in errors)
 
     if not lines:
         return json.dumps(body, sort_keys=True)

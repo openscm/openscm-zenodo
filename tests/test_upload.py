@@ -88,7 +88,7 @@ def test_upload_file_three_step_flow(upload_client, to_upload):
     # The content goes up as a stream, not as a body we have read into memory
     assert hasattr(session.calls[1]["data"], "read")
     assert session.calls[1]["headers"]["Content-Type"] == "application/octet-stream"
-    assert entry["checksum"] == f"md5:{md5}"
+    assert entry.checksum == f"md5:{md5}"
 
 
 def test_upload_file_uses_the_upload_timeout(upload_client, to_upload):
@@ -269,7 +269,7 @@ def test_upload_file_no_checksum_verification(
 
     entry = client.upload_file(RECORD_ID, path, verify_checksum=False)
 
-    assert entry["checksum"] == "md5:not-the-right-checksum"
+    assert entry.checksum == "md5:not-the-right-checksum"
 
 
 def test_upload_file_retries_a_checksum_mismatch(
@@ -299,7 +299,7 @@ def test_upload_file_retries_a_checksum_mismatch(
 
     entry = client.upload_file(RECORD_ID, path, max_attempts=2)
 
-    assert entry["checksum"] == f"md5:{md5}"
+    assert entry.checksum == f"md5:{md5}"
     assert len(session.calls) == 6
     assert any("Upload attempt 1 failed" in message for message in log_messages)
 
@@ -357,6 +357,27 @@ def test_upload_file_survives_a_failed_clean_up(
         client.upload_file(RECORD_ID, path, max_attempts=1)
 
     assert any("Failed to clean up" in message for message in log_messages)
+
+
+def test_upload_file_returns_a_file_entry(upload_client, to_upload):
+    """
+    The entry models the fields we care about and keeps the rest
+    """
+    client, _ = upload_client
+    path, md5 = to_upload
+
+    entry = client.upload_file(RECORD_ID, path)
+
+    assert entry.key == "data.nc"
+    assert entry.size == 23
+    assert entry.status == "completed"
+    assert entry.checksum == f"md5:{md5}"
+    # The parsed form, which is what a caller comparing checksums wants
+    assert entry.md5 == md5
+    # Everything Zenodo sent is still reachable
+    assert entry.raw["key"] == "data.nc"
+    # The raw blob would make the repr unreadable, so it is not in there
+    assert "raw=" not in repr(entry)
 
 
 def test_delete_file(no_token_in_env, make_recording_session, make_response):

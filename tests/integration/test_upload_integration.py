@@ -91,12 +91,12 @@ def test_upload_file(sandbox_client, draft_record_id, tmp_path):
 
     entry = sandbox_client.upload_file(draft_record_id, path, progress=False)
 
-    assert entry["key"] == "data.txt"
-    assert entry["status"] == "completed"
-    assert entry["checksum"] == f"md5:{get_file_md5(path)}"
+    assert entry.key == "data.txt"
+    assert entry.status == "completed"
+    assert entry.checksum == f"md5:{get_file_md5(path)}"
 
     assert get_remote_files(sandbox_client, draft_record_id) == {
-        "data.txt": entry["checksum"]
+        "data.txt": entry.checksum
     }
 
 
@@ -129,9 +129,9 @@ def test_upload_file_twice_replaces_it(sandbox_client, draft_record_id, tmp_path
     path.write_text("Second, which is longer\n")
     entry = sandbox_client.upload_file(draft_record_id, path, progress=False)
 
-    assert entry["checksum"] == f"md5:{get_file_md5(path)}"
+    assert entry.checksum == f"md5:{get_file_md5(path)}"
     assert get_remote_files(sandbox_client, draft_record_id) == {
-        "data.txt": entry["checksum"]
+        "data.txt": entry.checksum
     }
 
 

@@ -19,10 +19,6 @@ TQDM_FILE_PROGRESS_KWARGS_DEFAULT: dict[str, Any] = dict(
 )
 """Default configuration for a per-file transfer progress bar"""
 
-# Why is this a global constant, rather than the default value of the argument of the relevant function?
-DESC_MAX_LENGTH = 30
-"""Number of characters of a file's name to show as a bar's description"""
-
 
 def tqdm_write_sink(message: str) -> None:
     """
@@ -48,6 +44,7 @@ def get_file_progress_bar(
     total: int | None,
     progress: bool = True,
     position: int | None = None,
+    desc_max_length: int = 30,
     **kwargs: Any,
 ) -> tqdm.tqdm[Any]:
     """
@@ -58,8 +55,10 @@ def get_file_progress_bar(
     desc
         Description of the transfer.
 
-        [Ensure that information about truncation
-        stays up to date here if we move DESC_MAX_LENGTH.]
+        Good practice is to use the file's name as it appears on Zenodo,
+        so it is obvious which bar tracks which file.
+
+        `desc` is truncated to `desc_max_length` characters.
 
     total
         Total number of bytes to be transferred.
@@ -82,6 +81,9 @@ def get_file_progress_bar(
         Give each worker a stable slot when transferring in parallel,
         otherwise the bars jump around.
 
+    desc_max_length
+        Number of characters of `desc` to show
+
     **kwargs
         Passed to [`tqdm.tqdm`][tqdm.tqdm],
         overriding
@@ -99,7 +101,7 @@ def get_file_progress_bar(
         **TQDM_FILE_PROGRESS_KWARGS_DEFAULT,
         # `disable=None` makes tqdm silence itself when stderr is not a terminal
         "disable": None if progress else True,
-        "desc": desc[:DESC_MAX_LENGTH],
+        "desc": desc[:desc_max_length],
         "total": total,
         "position": position,
         **kwargs,
