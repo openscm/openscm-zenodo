@@ -29,6 +29,9 @@ def get_default_config(
     """
     Get default logging configuration
 
+    By default, we write via `tqdm` so that log lines
+    do not cause issues with progress bars.
+
     Parameters
     ----------
     level
@@ -42,8 +45,6 @@ def get_default_config(
     return dict(
         handlers=[
             dict(
-                # Write via `tqdm` so that log lines emitted during a transfer
-                # do not shred the progress bars
                 sink=tqdm_write_sink,
                 level=level,
                 colorize=True,

@@ -1,9 +1,5 @@
 """
 Progress bars for file transfers
-
-One bar per file, which disappears when that file finishes.
-Uploads (Part 2 of the rewrite) and downloads (Part 5) share this,
-so the two directions look the same.
 """
 
 from __future__ import annotations
@@ -18,13 +14,12 @@ TQDM_FILE_PROGRESS_KWARGS_DEFAULT: dict[str, Any] = dict(
     unit="B",
     unit_scale=True,
     unit_divisor=1024,
-    # The bar is erased when the file completes,
-    # so bars do not pile up when transferring many files
     leave=False,
     dynamic_ncols=True,
 )
 """Default configuration for a per-file transfer progress bar"""
 
+# Why is this a global constant, rather than the default value of the argument of the relevant function?
 DESC_MAX_LENGTH = 30
 """Number of characters of a file's name to show as a bar's description"""
 
@@ -32,12 +27,6 @@ DESC_MAX_LENGTH = 30
 def tqdm_write_sink(message: str) -> None:
     """
     Write a log message without breaking any progress bars
-
-    This is the sink used by
-    [`get_default_config`][openscm_zenodo.logging.get_default_config].
-    A log line written straight to `stderr` while a bar is on screen
-    shreds the bar, and transfers log as they go
-    (checksum timings, retries), so this matters in practice.
 
     Parameters
     ----------
@@ -48,6 +37,8 @@ def tqdm_write_sink(message: str) -> None:
     # We want stderr, both because that is where logs belong
     # and because that is where the bars are,
     # so this is the stream whose bars need clearing.
+    # end="" ensures that we don't have new lines appearing
+    # where we don't want them.
     tqdm.tqdm.write(message, end="", file=sys.stderr)
 
 
@@ -67,17 +58,14 @@ def get_file_progress_bar(
     desc
         Description of the transfer.
 
-        Use the file's name as it appears on Zenodo,
-        so it is obvious which bar tracks which file.
-        This is truncated to
-        [`DESC_MAX_LENGTH`][openscm_zenodo.progress.DESC_MAX_LENGTH] characters.
+        [Ensure that information about truncation
+        stays up to date here if we move DESC_MAX_LENGTH.]
 
     total
         Total number of bytes to be transferred.
 
-        Pass `None` if the size is not known,
-        which gives a bar with no completion percentage
-        rather than no bar at all.
+        Pass `None` if the size is not known
+        (which gives a bar with no completion percentage).
 
     progress
         Should a progress bar be shown?
@@ -136,9 +124,5 @@ def get_progress_reading_wrapper(file_handle: Any, progress_bar: tqdm.tqdm[Any])
     -------
     :
         The wrapped file handle.
-
-        This proxies everything else through to `file_handle`,
-        which is what allows `requests` to work out the content's length
-        rather than falling back to chunked transfer encoding.
     """
     return tqdm.utils.CallbackIOWrapper(progress_bar.update, file_handle, "read")

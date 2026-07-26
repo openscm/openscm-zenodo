@@ -55,6 +55,9 @@ class MissingTokenError(ZenodoError):
             [
                 f"A Zenodo token is required to {description}, "
                 "but no token could be resolved.",
+                # Is having this information in an error message like this a good idea,
+                # or is it just prone to drift and being wrong over time?
+                # As an alternative, we could simply delete everything in this error message from here below.
                 "Tokens are looked for in the following places, "
                 "highest precedence first:",
                 "1. the `token` argument to `ZenodoClient` "
@@ -77,8 +80,7 @@ class ChecksumMismatchError(ZenodoError):
     """
     Raised when a transferred file's checksum does not match the one we expected
 
-    The request itself succeeded, the bytes were wrong,
-    so no amount of transport-level retrying would have caught this.
+    The request itself succeeded but the bytes were wrong.
     """
 
     def __init__(self, name: str, *, local_md5: str, remote_md5: str) -> None:
@@ -101,10 +103,10 @@ class ChecksumMismatchError(ZenodoError):
         self.remote_md5 = remote_md5
 
         msg = (
-            f"The checksum of {name!r} does not match. "
+            f"The checksum of {name!r} does not match what we expect. "
             f"Locally we calculated {local_md5!r}, "
             f"Zenodo reports {remote_md5!r}. "
-            "The transfer was corrupted."
+            "Most likely explanation: the transfer was corrupted."
         )
 
         super().__init__(msg)
@@ -194,6 +196,7 @@ def format_error_body(response: requests.models.Response) -> str:
     if isinstance(errors, list):
         for error in errors:
             lines.append(f"- {format_field_error(error)}")
+    # What happens if errors is not a list?
 
     if not lines:
         return json.dumps(body, sort_keys=True)

@@ -471,15 +471,19 @@ def should_retry_upload(
         `True` if the upload is worth trying again
     """
     if isinstance(exc, ChecksumMismatchError):
-        # Not an HTTP failure at all: the request succeeded, the bytes were wrong.
-        # No transport-level retry can see this.
+        # Not an HTTP failure: the request succeeded but the bytes were wrong
+        # so we need to retry.
         return True
 
     if isinstance(exc, ZenodoHTTPError):
-        # Zenodo answered, so only try again if the answer suggests it is worth it.
-        # Retrying a rejected upload four more times helps nobody.
+        # Zenodo answered, so only try again if the answer suggests it is worth it
+        # (e.g. retrying a rejected upload four more times helps no one).
         return exc.response.status_code in retry_status_forcelist
 
+    # Please clarify what this means: it can be retried,
+    # but only if the exception is a request exception?
+    # If it isn't, the retry has to be handled elsewhere
+    # so that the file handle is replayed correctly?
     # Connection errors, read timeouts and the like.
     # The session's retries cannot cover the content request,
     # because its body is a file handle which cannot be replayed.
@@ -502,6 +506,8 @@ def _log_upload_retry(retry_state: RetryCallState) -> None:
 
     logger.warning(
         f"Upload attempt {retry_state.attempt_number} failed with {exc!r}. "
+        # Does it make sense to report trying again in 0.0s?
+        # Doesn't next_action being None indicate that there will be no retry?
         f"Trying again in {sleep:.1f}s."
     )
 
@@ -823,34 +829,39 @@ class ZenodoClient:
             Path of the file
         """
         # `filename` comes from the local file system,
-        # so it can contain characters which are not URL safe
+        # so it can contain characters which are not URL safe.
         quoted = urllib.parse.quote(filename, safe="")
 
         return f"/api/records/{record_id}/draft/files/{quoted}{suffix}"
 
     def delete_file(self, record_id: str | RecordID, filename: str) -> None:
         """
-        Delete a file from a record's draft
+        Delete a file from a record
+
+        The record must be, by definition a draft,
+        you can't delete from published records.
 
         Parameters
         ----------
         record_id
-            ID of the record whose draft to delete the file from
+            Record from which to delete the file
 
         filename
             Name of the file to delete, as it appears on Zenodo
         """
-        logger.info(f"Deleting {filename!r} from the draft of {record_id!r}")
+        logger.info(f"Deleting {filename!r} from {record_id!r}")
         self._request(
             self._get_draft_file_path(record_id, filename),
             method="DELETE",
             requires_auth=True,
-            description=f"delete {filename!r} from the draft of record {record_id!r}",
+            description=f"delete {filename!r} from {record_id!r}",
         )
 
     def _initialise_file(self, record_id: str, filename: str) -> None:
         """
-        Initialise a file on a record's draft, the first step of an upload
+        Initialise a file on a record (by definition a draft)
+
+        This is the the first step of an upload.
 
         If `filename` is already on the draft, we delete it and start again.
         That covers both re-uploading a file which has changed
@@ -860,15 +871,15 @@ class ZenodoClient:
         Parameters
         ----------
         record_id
-            ID of the record whose draft to initialise the file on
+            Record on which to initialise the file
 
         filename
             Name of the file, as it will appear on Zenodo
         """
         path = f"/api/records/{record_id}/draft/files"
-        description = f"initialise {filename!r} on the draft of record {record_id!r}"
+        description = f"initialise {filename!r} on record {record_id!r}"
 
-        try:
+        def initialise_file():
             self._request(
                 path,
                 method="POST",
@@ -876,24 +887,21 @@ class ZenodoClient:
                 json=[{"key": filename}],
                 description=description,
             )
+
+        try:
+            initialise_file()
 
         except ZenodoHTTPError as exc:
             if exc.response.status_code != HTTP_BAD_REQUEST:
                 raise
 
             logger.debug(
-                f"Could not initialise {filename!r} on the draft of {record_id!r}, "
+                f"Could not initialise {filename!r} on record {record_id!r}, "
                 "assuming it is already there. "
                 "Deleting it and initialising again."
             )
             self.delete_file(record_id, filename)
-            self._request(
-                path,
-                method="POST",
-                requires_auth=True,
-                json=[{"key": filename}],
-                description=description,
-            )
+            initialise_file()
 
     def _upload_file_content(
         self,
@@ -910,7 +918,7 @@ class ZenodoClient:
         Parameters
         ----------
         record_id
-            ID of the record whose draft to upload to
+            ID of the record to upload to
 
         path
             File to upload
@@ -938,9 +946,7 @@ class ZenodoClient:
                     data=get_progress_reading_wrapper(file_handle, progress_bar),
                     headers={"Content-Type": "application/octet-stream"},
                     timeout=self.timeout_upload,
-                    description=(
-                        f"upload {filename!r} to the draft of record {record_id!r}"
-                    ),
+                    description=(f"upload {filename!r} to record {record_id!r}"),
                 )
 
     def _commit_file(self, record_id: str, filename: str) -> dict[str, Any]:
@@ -950,7 +956,7 @@ class ZenodoClient:
         Parameters
         ----------
         record_id
-            ID of the record whose draft the file belongs to
+            ID of the record the file belongs to
 
         filename
             Name of the file, as it appears on Zenodo
@@ -958,7 +964,7 @@ class ZenodoClient:
         Returns
         -------
         :
-            The file's entry on the draft.
+            The file's entry.
 
             Among other things, this reports the checksum
             which Zenodo calculated for the bytes it received.
@@ -967,7 +973,7 @@ class ZenodoClient:
             self._get_draft_file_path(record_id, filename, "/commit"),
             method="POST",
             requires_auth=True,
-            description=f"commit {filename!r} to the draft of record {record_id!r}",
+            description=f"commit {filename!r} to record {record_id!r}",
         )
 
         return cast(dict[str, Any], response.json())
@@ -978,22 +984,26 @@ class ZenodoClient:
         path: Path,
         *,
         filename: str,
+        # Is there a reason to not make this required
+        # i.e. not always check against the local checksum?
         local_md5: str | None,
         progress: bool,
         position: int | None,
+        # Can we introduce a more helpful return type
+        # rather than the loose dict[str, Any] we currently have?
     ) -> dict[str, Any]:
         """
         Make one attempt at uploading a file
 
         This is the unit that is retried,
         so it starts by initialising the file from scratch:
-        the content of a committed file cannot be replaced,
+        the content of a committed file cannot be replaced
         and a partly-uploaded file cannot be resumed.
 
         Parameters
         ----------
         record_id
-            ID of the record whose draft to upload to
+            ID of the record to upload to
 
         path
             File to upload
@@ -1049,7 +1059,7 @@ class ZenodoClient:
         Parameters
         ----------
         record_id
-            ID of the record whose draft to clean up
+            ID of the record to clean up
 
         filename
             Name of the file whose upload failed
@@ -1060,7 +1070,7 @@ class ZenodoClient:
         except ZenodoError as exc:
             logger.warning(
                 f"Failed to clean up {filename!r} "
-                f"on the draft of record {record_id!r} after a failed upload: {exc}. "
+                f"on the record {record_id!r} after a failed upload: {exc}. "
                 "The draft may not be publishable until this file is removed."
             )
 
@@ -1073,6 +1083,7 @@ class ZenodoClient:
         progress: bool = True,
         position: int | None = None,
         max_attempts: int = 5,
+        # As above, can we introduce a better type here?
     ) -> dict[str, Any]:
         """
         Upload a file to a record's draft
@@ -1083,7 +1094,8 @@ class ZenodoClient:
         then it is committed.
         This does all three.
 
-        The record must already have a draft.
+        The record must be a draft
+        (it is not possible to upload a file to a published record).
 
         Note that Zenodo has no directories:
         the file lands under `path.name`,
@@ -1116,9 +1128,7 @@ class ZenodoClient:
         max_attempts
             Maximum number of times to try the upload before giving up.
 
-            The retries mounted on the session
-            (see [`build_session`][openscm_zenodo.zenodo.build_session])
-            cannot help here:
+            Any retries mounted on `self.session` cannot help here:
             the content request streams a file handle which cannot be replayed,
             and a checksum mismatch is not an HTTP failure at all.
             So the whole upload is retried instead,

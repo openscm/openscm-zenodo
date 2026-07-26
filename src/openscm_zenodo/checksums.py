@@ -1,11 +1,8 @@
 """
-Checksums
+Checksum handling
 
-Zenodo reports every file's checksum as `"md5:<hex>"`,
-which is what lets us verify an upload,
-skip re-uploading a file that has not changed (Part 3 of the rewrite)
-and verify a download (Part 5).
-This module is the one place that computes and compares them.
+Zenodo reports every file's checksum.
+We use this to verify that uploads happened correctly.
 """
 
 from __future__ import annotations
@@ -28,19 +25,11 @@ def get_file_md5(
     """
     Get the MD5 checksum of a file
 
-    The file is read in chunks, so this works on files
-    which do not fit in memory.
-
-    Hashing is CPU-bound.
-    For large files it can be a non-trivial share of an upload or download,
-    and it is easy to mistake for slow I/O,
-    so we log how long it took.
-    Enable `DEBUG` logging for `openscm_zenodo`
+    Enable `DEBUG` logging
     (see [`setup_logging`][openscm_zenodo.logging.setup_logging])
-    to see the timing of every hash;
-    hashes which take longer than `slow_threshold_s` are reported at `INFO`,
-    so the "why is this so slow?" case shows up
-    without every small file being noisy.
+    to see the timing of every hash.
+    Hashes which take longer than `slow_threshold_s` are reported at `INFO` level.
+    so they can be reported without small file reporting making the logs very noisy.
 
     Parameters
     ----------
@@ -49,23 +38,16 @@ def get_file_md5(
 
     chunk_size
         Number of bytes to read at a time
+        (avoids failures on files that don't fit in memory).
 
     slow_threshold_s
-        Number of seconds beyond which we report the timing at `INFO`
+        Number of seconds beyond which we report the timing at `INFO` log level
+        (rather than `DEBUG`).
 
     Returns
     -------
     :
         MD5 checksum of `path`, as a hex string
-
-    Examples
-    --------
-    >>> import tempfile
-    >>> with tempfile.TemporaryDirectory() as tmp_dir:
-    ...     path = Path(tmp_dir) / "example.txt"
-    ...     _ = path.write_text("Hello, Zenodo")
-    ...     get_file_md5(path)
-    'b77017ecd0f93c60f84d42dcf352368e'
     """
     size = path.stat().st_size
     logger.debug(f"Computing MD5 for {path} ({size} bytes)")
@@ -79,12 +61,11 @@ def get_file_md5(
 
     elapsed = time.perf_counter() - start
 
-    # Guard against a zero elapsed time on tiny files
     rate_mb_s = (size / 1024**2) / elapsed if elapsed > 0 else float("inf")
     msg = f"Computed MD5 for {path} in {elapsed:.2f}s ({rate_mb_s:.1f} MB/s)"
+
     if elapsed > slow_threshold_s:
         logger.info(msg)
-
     else:
         logger.debug(msg)
 
@@ -98,7 +79,7 @@ def get_md5_from_checksum(checksum: str) -> str:
     Parameters
     ----------
     checksum
-        Checksum as Zenodo reports it, i.e. `"md5:<hex>"`
+        Checksum as Zenodo reports it
 
     Returns
     -------
@@ -156,5 +137,3 @@ def assert_md5_matches(name: str, *, local_md5: str, remote_checksum: str) -> No
 
     if remote_md5 != local_md5:
         raise ChecksumMismatchError(name, local_md5=local_md5, remote_md5=remote_md5)
-
-    logger.debug(f"Checksum for {name!r} matches ({local_md5})")
