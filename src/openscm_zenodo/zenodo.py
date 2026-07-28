@@ -50,6 +50,7 @@ from openscm_zenodo.exceptions import (
     FileNotOnRecordError,
     MissingTokenError,
     RecordNotFoundError,
+    UnknownCitationStyleError,
     ZenodoError,
     ZenodoHTTPError,
 )
@@ -152,6 +153,135 @@ class FilesMode(str, Enum):
     This is the efficient path for releasing a new version of a dataset
     where most files have not changed.
     """
+
+
+class CitationFormat(str, Enum):
+    """
+    Formats in which Zenodo will export a record
+
+    Zenodo serves these through content negotiation on the record itself,
+    i.e. `GET /api/records/{id}` with an `Accept` header,
+    see [`CITATION_FORMAT_ACCEPT`][openscm_zenodo.zenodo.CITATION_FORMAT_ACCEPT].
+
+    The values here are the names a user types, e.g. `--format datacite-json`,
+    not the mime types they translate to.
+    The two are deliberately separate: the value is public API
+    (it appears on the command line, in help text and in any config file),
+    whereas the mime type is a transport detail
+    which Zenodo could change without the format itself changing.
+    """
+
+    bibtex = "bibtex"
+    """BibTeX entry"""
+
+    csl = "csl"
+    """Citation Style Language JSON"""
+
+    datacite_json = "datacite-json"
+    """DataCite JSON"""
+
+    datacite_xml = "datacite-xml"
+    """DataCite XML"""
+
+    dublin_core = "dublin-core"
+    """Dublin Core XML"""
+
+    json_ld = "json-ld"
+    """JSON-LD"""
+
+    marcxml = "marcxml"
+    """MARCXML"""
+
+    dcat = "dcat"
+    """DCAT XML"""
+
+    citation = "citation"
+    """
+    A styled, human-readable citation string
+
+    This is the only format which uses
+    `style` and `locale`, see
+    [`get_citation`][openscm_zenodo.zenodo.ZenodoClient.get_citation].
+    """
+
+
+CITATION_FORMAT_ACCEPT: dict[CitationFormat, str] = {
+    CitationFormat.bibtex: "application/x-bibtex",
+    CitationFormat.csl: "application/vnd.citationstyles.csl+json",
+    CitationFormat.datacite_json: "application/vnd.datacite.datacite+json",
+    CitationFormat.datacite_xml: "application/vnd.datacite.datacite+xml",
+    CitationFormat.dublin_core: "application/x-dc+xml",
+    CitationFormat.json_ld: "application/ld+json",
+    CitationFormat.marcxml: "application/marcxml+xml",
+    CitationFormat.dcat: "application/dcat+xml",
+    CitationFormat.citation: "text/x-bibliography",
+}
+"""
+The `Accept` header which gets each [`CitationFormat`][openscm_zenodo.zenodo.CitationFormat]
+
+Every format is covered: the tests parametrise over
+[`CitationFormat`][openscm_zenodo.zenodo.CitationFormat],
+so a member added without an entry here fails the suite
+rather than raising a `KeyError` in front of a user.
+"""  # noqa: E501
+
+INVENIORDM_JSON_ACCEPT = "application/vnd.inveniordm.v1+json"
+"""
+`Accept` header which gets the native InvenioRDM view of a record
+
+Zenodo's default serialisation of a record is a legacy-compatible shape,
+which hides `access` and `pids` and renders `files` as a list.
+We can use this to ask for the native document instead
+(because that is the shape the rest of the API speaks).
+"""
+
+CITATION_STYLE_DEFAULT = "apa"
+"""
+Citation style used if none is given
+
+`Accept: text/x-bibliography` without a style is a
+`400 Citation string style not found.`, so there has to be a default.
+"""
+
+CITATION_LOCALE_DEFAULT = "en-US"
+"""Citation locale used if none is given"""
+
+KNOWN_CITATION_STYLES: tuple[str, ...] = (
+    "acm-sig-proceedings",
+    "american-medical-association",
+    "apa",
+    "bibtex",
+    "chicago-author-date",
+    "harvard-cite-them-right",
+    "ieee",
+    "modern-language-association",
+    "nature",
+    "science",
+)
+"""
+Citation style IDs we have verified Zenodo accepts
+
+This is not the full list.
+Zenodo accepts more CSL styles than we have checked,
+so an unknown style is passed through with a warning
+rather than being rejected.
+"""
+
+CITATION_STYLE_ALIASES: dict[str, str] = {
+    "chicago-fullnote-bibliography": "chicago-author-date",
+    "chicago-note-bibliography": "chicago-author-date",
+    "harvard1": "harvard-cite-them-right",
+    "mla": "modern-language-association",
+    "vancouver": "american-medical-association",
+}
+"""
+Style IDs we have verified Zenodo rejects, and the closest ID it accepts
+
+Zenodo wants full CSL style filenames, not the short names its web UI shows,
+so these are the obvious things to type which come back as a `400`.
+We fail on them up front, with the working ID in the message,
+rather than letting the request go out and fail.
+"""
 
 
 RecordID = NewType("RecordID", str)
@@ -2342,6 +2472,394 @@ class ZenodoClient:
             progress=progress,
         )
 
+    def get_published(self, record_id: str | RecordID) -> dict[str, Any]:
+        """
+        Get a published record
+
+        Parameters
+        ----------
+        record_id
+            ID of the record to get
+
+        Returns
+        -------
+        :
+            The record, as Zenodo's native InvenioRDM serialisation reports it
+
+        Raises
+        ------
+        ZenodoHTTPError
+            There is no published record with this ID,
+            or it is restricted and our token does not have access to it.
+
+            Use [`get_draft`][openscm_zenodo.zenodo.ZenodoClient.get_draft]
+            for a record which has not been published yet
+            and use a token if the record is private.
+
+        Examples
+        --------
+        >>> record = ZenodoClient().get_published("4589756")
+        >>> record["metadata"]["title"]
+        'Reduced Complexity Model Intercomparison Project (RCMIP) protocol'
+        >>> record["pids"]["doi"]["identifier"]
+        '10.5281/zenodo.4589756'
+        """
+        logger.info(f"Retrieving published record {record_id!r}")
+
+        response = self._request(
+            f"/api/records/{record_id}",
+            headers={"Accept": INVENIORDM_JSON_ACCEPT},
+            description=f"get published record {record_id!r}",
+        )
+
+        return cast(dict[str, Any], response.json())
+
+    def get_draft(self, record_id: str | RecordID) -> dict[str, Any]:
+        """
+        Get a record's draft
+
+        Parameters
+        ----------
+        record_id
+            ID of the record whose draft to get
+
+        Returns
+        -------
+        :
+            The draft, as Zenodo's native InvenioRDM serialisation reports it
+
+        Raises
+        ------
+        ZenodoHTTPError
+            The record has no draft (a `404`),
+            or we may not see it.
+        """
+        logger.info(f"Retrieving the draft of record {record_id!r}")
+
+        response = self._request(
+            f"/api/records/{record_id}/draft",
+            requires_auth=True,
+            headers={"Accept": INVENIORDM_JSON_ACCEPT},
+            description=f"get the draft of record {record_id!r}",
+        )
+
+        return cast(dict[str, Any], response.json())
+
+    def get_record(self, record_id: str | RecordID) -> dict[str, Any]:
+        """
+        Get a record, whether it is published or still a draft
+
+        This is the one to reach for if you do not already know which you have.
+        If you do, [`get_published`][openscm_zenodo.zenodo.ZenodoClient.get_published]
+        and [`get_draft`][openscm_zenodo.zenodo.ZenodoClient.get_draft]
+        each hit one endpoint and say so at the call site.
+        The record we return tells you which you got:
+        `is_draft` and `is_published` are both fields on it.
+
+        The published record wins if there is one.
+        A published record can also have a draft of its own,
+        holding metadata changes which have not been published yet;
+        this returns the published record in that case, not the pending one.
+        Which of the two a read should return is
+        still an open question (Part 13.3 of the rewrite).
+
+        Parameters
+        ----------
+        record_id
+            ID of the record to get
+
+        Returns
+        -------
+        :
+            The record or its draft, in Zenodo's native InvenioRDM serialisation
+
+        Raises
+        ------
+        RecordNotFoundError
+            We could not find the record at all
+
+        Notes
+        -----
+        We work out which of the two we are looking at by asking for the
+        published record and falling back to the draft, rather than by calling
+        [`is_draft`][openscm_zenodo.zenodo.ZenodoClient.is_draft] first.
+        The answer is the same — `is_draft` decides the same way — but asking it
+        first would mean fetching `/api/records/{id}` to find out, then fetching
+        it again to get the record. This way a published record costs one
+        request and a draft costs two.
+
+        Examples
+        --------
+        >>> record = ZenodoClient().get_record("4589756")
+        >>> record["is_published"], record["is_draft"]
+        (True, False)
+        """
+        for getter, needs_token in (
+            (self.get_published, False),
+            (self.get_draft, True),
+        ):
+            if needs_token and not self.token:
+                break
+
+            try:
+                return getter(record_id)
+
+            except ZenodoHTTPError as exc:
+                nothing_for_us = (HTTP_FORBIDDEN, HTTP_NOT_FOUND)
+                if exc.response.status_code not in nothing_for_us:
+                    raise
+
+        raise RecordNotFoundError(
+            str(record_id),
+            zenodo_domain=self.zenodo_domain_url,
+            token_source=self.token_source,
+        )
+
+    def get_metadata(self, record_id: str | RecordID) -> dict[str, Any]:
+        """
+        Get a record's metadata
+
+        This works with both published records and drafts,
+        because it goes through
+        [`get_record`][openscm_zenodo.zenodo.ZenodoClient.get_record].
+
+        A published record can also have a draft of its own,
+        holding metadata changes which have not been published yet.
+        **We return the published metadata in that case**, not the pending
+        changes, because the published record is what `get_record` returns.
+        Whether that is the right answer is still an open question
+        (Part 13.3 of the rewrite), and it is settled in Part 6.
+        Until then, [`get_draft`][openscm_zenodo.zenodo.ZenodoClient.get_draft]
+        is how to see the pending changes.
+
+        Parameters
+        ----------
+        record_id
+            ID of the record whose metadata to get
+
+        Returns
+        -------
+        :
+            The contents of the record's `metadata` key.
+
+            This is the same shape
+            [`update_metadata`][openscm_zenodo.zenodo.ZenodoClient.update_metadata]
+            takes, so metadata can be read from one record
+            and applied to another without unwrapping anything.
+
+        Raises
+        ------
+        RecordNotFoundError
+            We could not find the record at all
+
+        Notes
+        -----
+        The InvenioRDM metadata schema is a breaking change
+        from the schema the legacy API used, and is Part 6 of the rewrite.
+        This method hands back what Zenodo sends;
+        translating and validating it, and stripping the keys
+        which Zenodo rather than you controls, is still to come.
+
+        Examples
+        --------
+        >>> metadata = ZenodoClient().get_metadata("4589756")
+        >>> metadata["title"]
+        'Reduced Complexity Model Intercomparison Project (RCMIP) protocol'
+        >>> metadata["rights"][0]["id"]
+        'cc-by-sa-4.0'
+        """
+        logger.info(f"Retrieving the metadata of record {record_id!r}")
+
+        return cast(dict[str, Any], self.get_record(record_id)["metadata"])
+
+    def get_parent_id(self, record_id: str | RecordID) -> ParentID:
+        """
+        Get the ID which refers to all versions of a record
+
+        Zenodo calls this the record's parent.
+        Resolving it gives whichever version is the latest at the time,
+        which is what you want in a citation or a link
+        that should not go stale.
+
+        Parameters
+        ----------
+        record_id
+            ID of any version of the record
+
+        Returns
+        -------
+        :
+            ID of the record's parent
+
+        Raises
+        ------
+        RecordNotFoundError
+            We could not find the record at all
+
+        Examples
+        --------
+        >>> ZenodoClient().get_parent_id("4589756")
+        '4589726'
+        """
+        parent_id = ParentID(str(self.get_record(record_id)["parent"]["id"]))
+
+        return parent_id
+
+    def _get_citation_params(
+        self,
+        fmt: CitationFormat,
+        *,
+        style: str,
+        locale: str,
+        warn_unknown_style: bool,
+    ) -> dict[str, str] | None:
+        """
+        Work out the query parameters to send with a citation request
+
+        Parameters
+        ----------
+        fmt
+            Format the citation was asked for in
+
+        style
+            Citation style that was asked for
+
+        locale
+            Locale that was asked for
+
+        warn_unknown_style
+            Should we warn about a style we have not checked?
+
+        Returns
+        -------
+        :
+            Parameters to send, or `None` if there are none to send
+
+        Raises
+        ------
+        UnknownCitationStyleError
+            `style` is one we have verified Zenodo rejects
+        """
+        if fmt is not CitationFormat.citation:
+            asked_for = {
+                "style": (style, CITATION_STYLE_DEFAULT),
+                "locale": (locale, CITATION_LOCALE_DEFAULT),
+            }
+            supplied = [
+                name for name, (given, default) in asked_for.items() if given != default
+            ]
+            if supplied:
+                logger.warning(
+                    f"Ignoring {' and '.join(supplied)}: "
+                    f"they only apply to {CitationFormat.citation.value!r}, "
+                    f"not {fmt.value!r}"
+                )
+
+            return None
+
+        if style in CITATION_STYLE_ALIASES:
+            raise UnknownCitationStyleError(
+                style,
+                suggestion=CITATION_STYLE_ALIASES[style],
+                known_styles=KNOWN_CITATION_STYLES,
+            )
+
+        if warn_unknown_style and style not in KNOWN_CITATION_STYLES:
+            logger.warning(
+                f"We have not checked the citation style {style!r}. "
+                "Zenodo accepts more CSL styles than we know about, "
+                "so we are sending it anyway. "
+                "If Zenodo does not know it either, "
+                "the request comes back as a 400."
+            )
+
+        return {"style": style, "locale": locale}
+
+    def get_citation(
+        self,
+        record_id: str | RecordID,
+        *,
+        fmt: CitationFormat = CitationFormat.bibtex,
+        style: str = CITATION_STYLE_DEFAULT,
+        locale: str = CITATION_LOCALE_DEFAULT,
+        warn_unknown_style: bool = True,
+    ) -> str:
+        """
+        Get a record's citation
+
+        Parameters
+        ----------
+        record_id
+            ID of the record to cite
+
+        fmt
+            Format to get the citation in.
+
+        style
+            Citation style to render in.
+
+            This only applies to
+            [`CitationFormat.citation`][openscm_zenodo.zenodo.CitationFormat],
+            and is ignored, with a warning, for any other format.
+            Zenodo wants full CSL style IDs,
+            see [`KNOWN_CITATION_STYLES`][openscm_zenodo.zenodo.KNOWN_CITATION_STYLES].
+
+        locale
+            Locale to render in.
+
+            As with `style`, this only applies to
+            [`CitationFormat.citation`][openscm_zenodo.zenodo.CitationFormat].
+
+        warn_unknown_style
+            Should we warn about a style we have not checked?
+
+            We only know a subset of the CSL styles Zenodo accepts, see
+            [`KNOWN_CITATION_STYLES`][openscm_zenodo.zenodo.KNOWN_CITATION_STYLES],
+            so a style we do not know is sent with a warning rather than
+            refused. Set this to `False` if you are using a style
+            you know works and do not want to hear about it every time.
+
+        Returns
+        -------
+        :
+            The record's citation, as Zenodo renders it
+
+        Raises
+        ------
+        UnknownCitationStyleError
+            `style` is one we have verified Zenodo rejects
+
+        Examples
+        --------
+        >>> client = ZenodoClient()
+        >>> bibtex = client.get_citation("4589756")
+        >>> print(bibtex.splitlines()[0])
+        @dataset{zebedee_nicholls_2021_4589756,
+
+        >>> citation = client.get_citation("4589756", fmt=CitationFormat.citation)
+        >>> # Zenodo sends this as one long line, we wrap it here
+        >>> import textwrap
+        >>> print(textwrap.fill(citation, width=70))
+        Zebedee Nicholls& Jared Lewis. (2021). Reduced Complexity Model
+        Intercomparison Project (RCMIP) protocol (Version v5.1.0) [Dataset].
+        Zenodo. https://doi.org/10.5281/zenodo.4589756
+        """
+        logger.info(f"Retrieving the {fmt.value} citation of record {record_id!r}")
+
+        response = self._request(
+            f"/api/records/{record_id}",
+            headers={"Accept": CITATION_FORMAT_ACCEPT[fmt]},
+            params=self._get_citation_params(
+                fmt,
+                style=style,
+                locale=locale,
+                warn_unknown_style=warn_unknown_style,
+            ),
+            description=f"get the {fmt.value} citation of record {record_id!r}",
+        )
+
+        return response.text
+
     def get_latest_version_id(self, record_id: str | RecordID) -> RecordID:
         """
         Get the ID of the latest version of a record
@@ -3350,11 +3868,131 @@ class ZenodoInteractor:
 
 
 def retrieve_metadata(
+    record_id: str | RecordID,
+    client: ZenodoClient | None = None,
+) -> dict[str, Any]:
+    """
+    Retrieve a record's metadata, in one call
+
+    Parameters
+    ----------
+    record_id
+        ID of the record whose metadata to retrieve
+
+    client
+        Client to interact with Zenodo with.
+
+        If not supplied, we build a default
+        [`ZenodoClient`][openscm_zenodo.zenodo.ZenodoClient],
+        which picks up a token from the environment if there is one.
+
+    Returns
+    -------
+    :
+        The contents of the record's `metadata` key, see
+        [`get_metadata`][openscm_zenodo.zenodo.ZenodoClient.get_metadata]
+
+    Examples
+    --------
+    >>> metadata = retrieve_metadata("4589756")
+    >>> metadata["version"]
+    'v5.1.0'
+    """
+    if client is None:
+        client = ZenodoClient()
+
+    return client.get_metadata(record_id)
+
+
+def retrieve_citation(  # noqa: PLR0913
+    record_id: str | RecordID,
+    client: ZenodoClient | None = None,
+    *,
+    fmt: CitationFormat = CitationFormat.bibtex,
+    style: str = CITATION_STYLE_DEFAULT,
+    locale: str = CITATION_LOCALE_DEFAULT,
+    warn_unknown_style: bool = True,
+) -> str:
+    r"""
+    Retrieve a record's citation, in one call
+
+    Parameters
+    ----------
+    record_id
+        ID of the record to cite
+
+    client
+        Client to interact with Zenodo with.
+
+        If not supplied, we build a default
+        [`ZenodoClient`][openscm_zenodo.zenodo.ZenodoClient],
+        which picks up a token from the environment if there is one.
+
+    fmt
+        Format to get the citation in
+
+    style
+        Citation style to render in, for
+        [`CitationFormat.citation`][openscm_zenodo.zenodo.CitationFormat] only
+
+    locale
+        Locale to render in, for
+        [`CitationFormat.citation`][openscm_zenodo.zenodo.CitationFormat] only
+
+    warn_unknown_style
+        Should we warn about a style we have not checked?
+
+    Returns
+    -------
+    :
+        The record's citation, see
+        [`get_citation`][openscm_zenodo.zenodo.ZenodoClient.get_citation]
+
+    Examples
+    --------
+    >>> res = retrieve_citation("4589756")
+    >>> # There are trailing newlines in the Zenodo response.
+    >>> # We strip them here
+    >>> res_disp = "\n".join([v.rstrip() for v in res.splitlines()])
+    >>> print(res_disp)
+    @dataset{zebedee_nicholls_2021_4589756,
+      author       = {Zebedee Nicholls and
+                      Jared Lewis},
+      title        = {Reduced Complexity Model Intercomparison Project
+                       (RCMIP) protocol
+                      },
+      month        = mar,
+      year         = 2021,
+      publisher    = {Zenodo},
+      version      = {v5.1.0},
+      doi          = {10.5281/zenodo.4589756},
+      url          = {https://doi.org/10.5281/zenodo.4589756},
+    }
+    """
+    if client is None:
+        client = ZenodoClient()
+
+    return client.get_citation(
+        record_id,
+        fmt=fmt,
+        style=style,
+        locale=locale,
+        warn_unknown_style=warn_unknown_style,
+    )
+
+
+def retrieve_metadata_legacy(
     deposition_id: str,
     zenodo_interactor: ZenodoInteractor | None = None,
 ) -> dict[str, dict[str, str]]:
     r"""
-    Retrieve metadata associated with a given deposition ID
+    Retrieve metadata associated with a given deposition ID, using the legacy API
+
+    This is the pre-InvenioRDM implementation,
+    so the metadata comes back in the legacy schema.
+    It is kept only so that the command-line interface keeps working
+    while the rewrite lands, and goes when the CLI is trimmed (Part 8).
+    Use [`retrieve_metadata`][openscm_zenodo.zenodo.retrieve_metadata] instead.
 
     Parameters
     ----------
@@ -3374,7 +4012,7 @@ def retrieve_metadata(
     Examples
     --------
     >>> import json
-    >>> res_raw = retrieve_metadata("4589756")
+    >>> res_raw = retrieve_metadata_legacy("4589756")
     >>> res_json = json.dumps(res_raw, indent=2, sort_keys=True)
     >>> print(res_json)
     {

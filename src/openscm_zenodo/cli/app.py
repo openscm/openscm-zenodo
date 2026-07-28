@@ -60,7 +60,7 @@ METADATA_FILE_TYPE: TypeAlias = Annotated[
             "see the docstring of "
             "[`update_metadata`][openscm_zenodo.zenodo.ZenodoInteractor.update_metadata]. "  # noqa: E501
             "To get an example, see the docstring of "
-            "[`retrieve_metadata`][openscm_zenodo.zenodo.retrieve_metadata]."
+            "[`retrieve_metadata_legacy`][openscm_zenodo.zenodo.retrieve_metadata_legacy]."
         ),
     ),
 ]

@@ -227,6 +227,50 @@ class FileNotOnRecordError(ZenodoError):
         super().__init__(msg)
 
 
+class UnknownCitationStyleError(ZenodoError, ValueError):
+    """
+    Raised when a citation style is one we know Zenodo rejects
+    """
+
+    def __init__(
+        self,
+        style: str,
+        *,
+        suggestion: str | None,
+        known_styles: Collection[str],
+    ) -> None:
+        """
+        Initialise
+
+        Parameters
+        ----------
+        style
+            The style which was asked for
+
+        suggestion
+            The closest style ID Zenodo does accept, if we know of one
+
+        known_styles
+            Style IDs we have verified Zenodo accepts.
+        """
+        self.style = style
+        self.suggestion = suggestion
+        self.known_styles = tuple(known_styles)
+
+        msg = f"Zenodo does not accept the citation style {style!r}. "
+        if suggestion is not None:
+            msg += f"Did you mean {suggestion!r}? "
+
+        known_formatted = ", ".join(repr(known) for known in sorted(known_styles))
+        msg += (
+            f"Styles we have checked and know work: {known_formatted}. "
+            "Zenodo accepts more CSL styles than we list, "
+            "so other styles may be acceptable."
+        )
+
+        super().__init__(msg)
+
+
 class ZenodoHTTPError(ZenodoError):
     """
     Raised when Zenodo returns an unsuccessful HTTP status code

@@ -12,7 +12,11 @@ import pytest
 from typer.testing import CliRunner
 
 from openscm_zenodo.cli.app import app
-from openscm_zenodo.zenodo import ZenodoDomain, ZenodoInteractor, retrieve_metadata
+from openscm_zenodo.zenodo import (
+    ZenodoDomain,
+    ZenodoInteractor,
+    retrieve_metadata_legacy,
+)
 
 try:
     runner = CliRunner(mix_stderr=False)
@@ -231,7 +235,9 @@ def test_update_metadata(tmp_path):
     assert res.exit_code == 0, res.stderr
     assert not res.stdout
 
-    metadata_res = retrieve_metadata(deposition_id, zenodo_interactor=zenodo_interactor)
+    metadata_res = retrieve_metadata_legacy(
+        deposition_id, zenodo_interactor=zenodo_interactor
+    )
     assert metadata_res == metadata_new
 
     # Put the metadata back

@@ -301,7 +301,7 @@ ParentID = NewType("ParentID", str)   # the all-versions "concept" id
 
 - Methods **return** `RecordID` / `ParentID` (`create_record`, `new_version`,
   `get_latest_version_id`, `get_parent_id`, `create_new_version`).
-- Methods **accept** `str | RecordID`, so `client.get_record("15187976")` and
+- Methods **accept** `str | RecordID`, so `client.get_published("15187976")` and
   ids read from JSON/argv still work with no wrapping ceremony.
 - Zero runtime cost, checked by the `mypy` + `ty` already configured in the
   template, and it documents the method map far better than nine bare `str`s.
@@ -317,7 +317,8 @@ functions — `record_url(record_id, zenodo_domain)` — rather than a class.
 
 | Old (`ZenodoInteractor`) | New (`ZenodoClient`) | Notes |
 |---|---|---|
-| `get_record` | `get_record(record_id)` | `GET /api/records/{id}` |
+| `get_record` | `get_published(record_id)` | `GET /api/records/{id}` — published records only, see 1.2.2 |
+| — | `get_record(record_id)` | published or draft, whichever it is (1.2.2) |
 | `get_deposition` | `get_draft(record_id)` | `GET /api/records/{id}/draft` — read only, `404` if none |
 | — | `create_record(metadata)` → `RecordID` | `POST /api/records` (brand-new record + its draft) |
 | — | `get_or_create_draft(record_id)` → `RecordID` | `POST /api/records/{id}/draft` — the draft of a published record (see 1.2.1) |
@@ -387,6 +388,66 @@ Caveat: this is upstream InvenioRDM behaviour, and Zenodo runs its own pinned
 build. Part 12 gets an explicit **idempotency test** (call `get_or_create_draft`
 twice and `new_version` twice, assert the same id comes back both times) so a
 divergence shows up as a failing test rather than a surprise in production.
+
+#### 1.2.2 The read paths — ✅ IMPLEMENTED
+
+**Done** (sequencing step 2): `get_published`, `get_draft`, `get_record`,
+`get_metadata`, `get_parent_id` and `get_citation` (Part 10), plus the module-level
+`retrieve_metadata` and `retrieve_citation`, with unit tests
+(`tests/test_reads.py`) and live tests against production (read-only, no token)
+and the sandbox (`tests/integration/test_read_draft_integration.py`). Deltas from
+the text above, all deliberate:
+
+- **Everything asks for `Accept: application/vnd.inveniordm.v1+json`.** Zenodo's
+  default serialisation of a record is the legacy-compatible shape, which hides
+  `access` and `pids` and renders `files` as a list. Part 4 found this; the read
+  paths are where it starts mattering, so `INVENIORDM_JSON_ACCEPT` is sent on
+  every record/draft read and the native document is what callers get.
+- **The old `get_record` is `get_published`.** `get_record(record_id)` reads as
+  "get whatever record this is", which is not what a method that hits
+  `/api/records/{id}` and `404`s on an unpublished draft does. The name now
+  belongs to the resolver below, which is what it always described.
+  `get_published` / `get_draft` is a symmetric pair, in the same
+  published-versus-draft vocabulary `is_draft` already uses, and it makes the
+  choice at the call site an explicit one. Matching Zenodo's endpoint name is not
+  worth the ambiguity, particularly as our own `record_id` refers to both.
+- **`get_published` and `get_draft` never guess.** Each hits exactly one endpoint
+  and lets a `404` be a `404`, so a caller who needs the published record
+  specifically — or the draft specifically — can say so.
+- **`get_record` is the public resolver**, and the one to reach for when you do
+  not already know which of the two you have: published first, then the draft if
+  we have a token, then `RecordNotFoundError`. It was originally private
+  (`_get_record_or_draft`) with `get_metadata` as the only way to reach it, which
+  was the wrong shape — resolving is useful on its own, and the returned record
+  carries `is_draft`/`is_published` so the caller can see which they got. The
+  three methods now read as a set: two specific, one that works it out.
+- **`get_record` does not call `is_draft` first**, even though that is the
+  obvious way to describe it. `is_draft` decides by fetching
+  `/api/records/{id}`, so asking it first means fetching that endpoint to find
+  out and then fetching it again to get the record. Falling back instead gives
+  the same answer for one request on a published record and two on a draft.
+- **The published record wins when both exist**, which is the same answer
+  `is_draft(files_based=True)` gives. That is provisional: 13.3's open question is
+  exactly whether a read should return a published record's *pending* metadata
+  instead, and it is settled in Part 6. The docstring says which one you get, and
+  `test_get_record_prefers_the_published_record` pins it, so changing our mind in
+  Part 6 has to be deliberate.
+- **The reads return `dict[str, Any]`, i.e. the parsed JSON, for now.** Typed
+  models are the right end state and are listed in Part 6's work items, because
+  typing a record means typing its `metadata`, which is exactly Part 6's job.
+  Doing it before the schema is settled would mean writing the model twice. The
+  method names deliberately do **not** say `_raw`: it would be noise while every
+  read returns a `dict`, and it would need removing again as soon as they do not.
+- **`get_metadata` returns the contents of `metadata`, not `{"metadata": ...}`.**
+  That makes it symmetric with `update_metadata`, so metadata can be read off one
+  record and applied to another without unwrapping. The legacy method returned
+  the wrapper; this is part of the break.
+- **`user_controlled_only` is not here yet.** Which keys Zenodo rather than the
+  user controls is a schema question, so it lands with Part 6 rather than being
+  guessed at now.
+- **The legacy `retrieve_metadata` is now `retrieve_metadata_legacy`**, freeing
+  the name for the new helper, exactly as was done for `create_new_version`. It
+  and the `retrieve-metadata` CLI command go in Part 8.
 
 ### 1.3 Module-level helpers
 
@@ -1031,8 +1092,21 @@ Representative shape returned/accepted:
 Work items:
 
 - Rewrite `get_metadata` / `update_metadata` for the new schema.
+- **Give the reads a real return type.** `get_published`, `get_draft`,
+  `get_record` and `get_metadata` all return `dict[str, Any]` today
+  (see 1.2.2). Introduce `Metadata` and a `Record` (which carries `metadata`,
+  `access`, `pids`, `parent`, `versions`, `is_draft`/`is_published`) and return
+  those instead, in the style of `FileEntry` — parsed fields for what we use,
+  `raw` for the rest, so a response shaped differently to what we expect fails
+  where we read it. This belongs **here** rather than in step 2: typing a record
+  means typing its `metadata`, so doing it before the schema is settled means
+  writing the model twice. `is_draft` (13.3) is the other thing this unlocks —
+  `is_draft`/`is_published` are fields on the record, so a typed record makes the
+  two-questions-not-one point in 13.3 concrete.
 - `user_controlled_only` now strips InvenioRDM server-managed keys (`pids`,
-  `publication_date` if server-set, etc.).
+  `publication_date` if server-set, etc.). This is what `get_metadata` is still
+  missing from 1.3's signature, deliberately: which keys Zenodo controls is a
+  schema question.
 - Provide a small **validation helper** that catches the common schema mistakes
   with a clear error before hitting the API.
 - Rewrite every docstring example (the `retrieve_metadata` doctest currently
@@ -1204,19 +1278,51 @@ it only because it wasn't in the keep-list.
 
 ---
 
-## Part 10 — Citation export (configurable formats)
+## Part 10 — Citation export (configurable formats) — ✅ IMPLEMENTED
 
-`get_bibtex_entry` becomes `get_citation`, covering every serialisation Zenodo
-offers plus styled citation strings. This backs the `retrieve-citation` command
-(Part 8).
+**Done** (with the rest of sequencing step 2). `CitationFormat`,
+`CITATION_FORMAT_ACCEPT`, `KNOWN_CITATION_STYLES`, `CITATION_STYLE_ALIASES`,
+`ZenodoClient.get_citation` and the module-level `retrieve_citation`, with unit
+tests and live production tests covering **every** format and several styles
+(`tests/integration/test_read_integration.py`). Deltas from the text below:
+
+- **The old implementation was not broken after all, and 10.1's claim below is
+  wrong.** `get_bibtex_entry` requests `/records/{id}/export/bibtex` — the *web*
+  path, not `/api/records/{id}/export/bibtex` — and that still returns `200`
+  today. Only the `/api/...` variant `404`s, which is what was checked. So the
+  motivation for Part 10 is what it can do (every export format, styled
+  citations, one code path through `_request`), not a dead endpoint. The wider
+  point about drift stands: nothing would have told us either way, which is what
+  Part 12's live tests are for, and `test_get_citation_formats` is now that test.
+- **The style rules are split in two**, which is how both of 10.2's sentences can
+  hold at once. A style in `CITATION_STYLE_ALIASES` — one we have *verified*
+  Zenodo rejects — raises `UnknownCitationStyleError` before the request, naming
+  the ID which does work. Any other unrecognised style is sent with a warning, so
+  the CSL styles we have not enumerated stay reachable.
+- **`style`/`locale` for a non-`citation` format are only warned about when they
+  were actually changed**, so passing the defaults around (as the CLI will) is
+  silent.
+- **`warn_unknown_style: bool = True`** silences the unchecked-style warning for
+  someone who uses a style they know works. It does not silence
+  `UnknownCitationStyleError` — "we have not checked this" and "we have checked
+  this and it does not work" are different things, and there is a test saying so.
+  Part 8 should give it `--no-warn-unknown-style`, alongside Part 11's
+  `--no-warn-path-stripped`.
+- **`CitationFormat`'s values are the user-facing names** (`datacite-json`), not
+  the mime types, with `CITATION_FORMAT_ACCEPT` doing the translation. Collapsing
+  the two would put mime types on the command line and in help text, and would
+  tie a public identifier to a transport detail Zenodo could change underneath
+  us. The ×9 parametrised tests mean a format added without an `Accept` entry
+  fails the suite rather than raising a `KeyError` at a user.
 
 ### 10.1 The endpoint (verified against live Zenodo, 2026-07-25)
 
-**The current implementation is already broken.** `zenodo.py:205` requests
+~~**The current implementation is already broken.** `zenodo.py:205` requests
 `/records/{id}/export/bibtex`; that path now returns **404** for every format
 (`bibtex`, `csl`, `datacite-json`, `datacite-xml`, `dublincore`, `json-ld`,
-`marcxml`, `dcat-ap` all checked). InvenioRDM serves exports through **content
-negotiation on the record itself** instead:
+`marcxml`, `dcat-ap` all checked).~~ ❌ **Wrong** — see the note above: the code
+requests the web path, which still works. InvenioRDM serves exports through
+**content negotiation on the record itself**, and that is what we use:
 
 ```
 GET /api/records/{id}     Accept: <mime type>
@@ -1496,29 +1602,29 @@ when the env var is missing (`conftest.py:34`), and `ZenodoDomain.sandbox`
 Every row must have at least one test that reaches live Zenodo. Ticked off as
 implemented:
 
-| Method / endpoint | Client method | Target |
-|---|---|---|
-| `GET /api/records/{id}` | `get_record` | prod (read) |
-| `GET /api/records/{id}` + `Accept` (×9 formats) | `get_citation` | prod (read) |
-| `GET /api/records/{id}?style=&locale=` | `get_citation(fmt=citation)` | prod (read) |
-| `GET /api/records/{id}/files` | `list_files(draft=False)` | prod (read) |
-| `GET /api/records/{id}/files/{name}/content` | `download_file(draft=False)` | prod (read) |
-| `GET /api/records/{id}/versions` / `links.latest` | `get_latest_version_id` | prod (read) |
-| parent id | `get_parent_id` | prod (read) |
-| `POST /api/records` | `create_record` | sandbox |
-| `GET /api/records/{id}/draft` | `get_draft` | sandbox |
-| `POST /api/records/{id}/draft` | `get_or_create_draft` | sandbox |
-| `PUT /api/records/{id}/draft` | `update_metadata` | sandbox |
-| `POST /api/records/{id}/draft/files` | upload init | sandbox |
-| `PUT .../draft/files/{name}/content` | upload content | sandbox |
-| `POST .../draft/files/{name}/commit` | upload commit | sandbox |
-| `GET /api/records/{id}/draft/files` | `list_files(draft=True)` | sandbox |
-| `GET .../draft/files/{name}/content` | `download_file(draft=True)` | sandbox |
-| `DELETE .../draft/files/{name}` | `delete_files` | sandbox |
-| `POST .../draft/pids/doi` | `reserve_doi` | sandbox |
-| `POST .../draft/actions/publish` | `publish` | sandbox |
-| `POST /api/records/{id}/versions` | `new_version` | sandbox |
-| `POST .../draft/actions/files-import` | `import_files` | sandbox |
+| Method / endpoint | Client method | Target | Live test? |
+|---|---|---|---|
+| `GET /api/records/{id}` | `get_published` | prod (read) | ✅ |
+| `GET /api/records/{id}` + `Accept` (×9 formats) | `get_citation` | prod (read) | ✅ |
+| `GET /api/records/{id}?style=&locale=` | `get_citation(fmt=citation)` | prod (read) | ✅ |
+| `GET /api/records/{id}/files` | `list_files(draft=False)` | prod (read) | ✅ |
+| `GET /api/records/{id}/files/{name}/content` | `download_file(draft=False)` | prod (read) | ✅ |
+| `GET /api/records/{id}/versions` / `links.latest` | `get_latest_version_id` | prod (read) | ✅ |
+| parent id | `get_parent_id` | prod (read) | ✅ |
+| `POST /api/records` | `create_record` | sandbox |  |
+| `GET /api/records/{id}/draft` | `get_draft` | sandbox | ✅ |
+| `POST /api/records/{id}/draft` | `get_or_create_draft` | sandbox |  |
+| `PUT /api/records/{id}/draft` | `update_metadata` | sandbox | ✅ |
+| `POST /api/records/{id}/draft/files` | upload init | sandbox | ✅ |
+| `PUT .../draft/files/{name}/content` | upload content | sandbox | ✅ |
+| `POST .../draft/files/{name}/commit` | upload commit | sandbox | ✅ |
+| `GET /api/records/{id}/draft/files` | `list_files(draft=True)` | sandbox | ✅ |
+| `GET .../draft/files/{name}/content` | `download_file(draft=True)` | sandbox | ✅ |
+| `DELETE .../draft/files/{name}` | `delete_files` | sandbox | ✅ |
+| `POST .../draft/pids/doi` | `reserve_doi` | sandbox |  |
+| `POST .../draft/actions/publish` | `publish` | sandbox | ✅ |
+| `POST /api/records/{id}/versions` | `new_version` | sandbox | ✅ |
+| `POST .../draft/actions/files-import` | `import_files` | sandbox | ✅ |
 
 ### 12.3 Scenario tests
 
@@ -1813,6 +1919,15 @@ pins that in place would be pinning the wrong behaviour.
 
 ## Suggested sequencing
 
+**Where we are.** Steps 0, 1, 2, 6 and 7 are done, and step 5 is done apart from
+Part 11. They were taken out of order: uploads, mirror, versions and download
+(Parts 2–5) landed before the read paths and before the metadata schema, so the
+transport was exercised by the file work instead. Nothing downstream broke as a
+result — `update_metadata` landed as a pass-through with the schema explicitly
+deferred to Part 6, so step 3 still does the schema work it always did. The
+outstanding steps, in the order to take them, are: **3** (Part 6, which also
+settles 13.3), **4**, the **Part 11** remainder of 5, **2b**, **8** and **9**.
+
 0. ~~**`copier update` (Part 0)** — refresh the template from `v0.14.2`, keep
    `include_cli: true`, fix `project_description_short`, then re-lock and run
    `make check`. Own commit, before any library work.~~ ✅ **DONE** (commit
@@ -1822,8 +1937,11 @@ pins that in place would be pinning the wrong behaviour.
    exceptions module, Bearer auth, `resolve_token` precedence chain and the
    `RecordID`/`ParentID` `NewType`s (Part 1.1).~~ ✅ **DONE** — see the note at
    the top of 1.1.
-2. **Read paths** — `get_record`, `get_draft`, `get_metadata`, `get_citation`
-   (Part 10), `list_files`. Cheap, and they exercise the transport.
+2. ~~**Read paths** — `list_files` (landed with Part 3), plus `get_published`,
+   `get_draft`, `get_metadata`, `get_citation` (Part 10). Cheap, and they
+   exercise the transport.~~ ✅ **DONE** — plus `get_parent_id`, which is the
+   same kind of read. See the note at the top of Part 10 for the citation work,
+   and 1.2.2 below for the record/metadata reads.
 2b. **File-write guard (Part 13.5, steps 1–4)** — `RecordNotWritableError` and
    `_assert_writable` on the file-write methods, plus the race-window fixes. Small
    and self-contained, and **not urgent**: Zenodo already refuses these writes
@@ -1836,18 +1954,20 @@ pins that in place would be pinning the wrong behaviour.
 4. **Write paths** — `create_record`, `get_or_create_draft` (Part 1.2.1),
    `update_metadata`, `publish`, `reserve_doi`, `new_version` / `import_files`,
    `delete_files`.
-5. **Uploads (Parts 2, 11)** — the init→content→commit `upload_file`, `tenacity`
-   upload retry, checksum verification, `upload_files` parallelism, the shared
-   `leave=False` progress-bar helper (Part 2.1), and the path-stripping warning +
-   basename-collision error (Part 11.1–11.2). `zipping.py` and
-   `upload_files_as_zip` (Part 11.3) land here too — but note the determinism
-   requirement only pays off once `mirror_files` exists in step 6.
-6. **Mirror + versions (Parts 3–4)** — `mirror_files`, then `create_new_version`
-   with `FilesMode`.
-7. **Download (Part 5)** — `list_files(draft=...)`, `download_file` /
+5. **Uploads (Parts 2, 11)** — ~~the init→content→commit `upload_file`,
+   `tenacity` upload retry, checksum verification, `upload_files` parallelism,
+   the shared `leave=False` progress-bar helper (Part 2.1)~~ ✅ **DONE** (Part 2,
+   and the parallelism/progress-bar allocator with Part 3). **Still outstanding:
+   Part 11** — the path-stripping warning + basename-collision error
+   (11.1–11.2), and `zipping.py` + `upload_files_as_zip` (11.3).
+6. ~~**Mirror + versions (Parts 3–4)** — `mirror_files`, then
+   `create_new_version` with `FilesMode`.~~ ✅ **DONE** — see the notes at the
+   top of Parts 3 and 4.
+7. ~~**Download (Part 5)** — `list_files(draft=...)`, `download_file` /
    `download_files` / `retrieve_files`. Reuses the session, checksum helper,
    progress-bar helper and `tenacity` retry from step 5, so it slots in cheaply
-   once uploads exist.
+   once uploads exist.~~ ✅ **DONE** — see the notes at the top of Part 5
+   (`list_files` has no `draft` argument, and the helper is `download_files`).
 8. **Trim the CLI + packaging/docs (Parts 8–9).** The three retained commands are
    thin wrappers, so they land last, once `upload_files`, `download_files` and
    `get_citation` all exist.

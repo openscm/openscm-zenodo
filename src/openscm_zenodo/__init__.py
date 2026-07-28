@@ -7,6 +7,7 @@ import importlib.metadata
 from loguru import logger
 
 from openscm_zenodo.zenodo import (
+    CitationFormat,
     FilesMode,
     ZenodoClient,
     ZenodoDomain,
@@ -19,7 +20,9 @@ from openscm_zenodo.zenodo import (
     load_env_file,
     resolve_token,
     retrieve_bibtex_entry,
+    retrieve_citation,
     retrieve_metadata,
+    retrieve_metadata_legacy,
 )
 
 logger.disable("openscm_zenodo")
@@ -27,6 +30,7 @@ logger.disable("openscm_zenodo")
 __version__ = importlib.metadata.version("openscm_zenodo")
 
 __all__ = [
+    "CitationFormat",
     "FilesMode",
     "ZenodoClient",
     "ZenodoDomain",
@@ -39,5 +43,7 @@ __all__ = [
     "load_env_file",
     "resolve_token",
     "retrieve_bibtex_entry",
+    "retrieve_citation",
     "retrieve_metadata",
+    "retrieve_metadata_legacy",
 ]
