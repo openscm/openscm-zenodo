@@ -1574,6 +1574,243 @@ On top of per-endpoint coverage:
 
 ---
 
+## Part 13 — File writes never target a published record
+
+Part 5 settled one principle — **`draft` is never a parameter of the public API**
+— and the audit below confirms it held everywhere. This part adds the second and
+records what it takes to guarantee it *ourselves*.
+
+> **Invariant.** A published record's **files** are immutable to us. Every file
+> write goes to a draft, and we establish that the target *is* an unpublished
+> draft rather than relying on Zenodo to refuse. `new_version` is the documented
+> exception: it addresses a published record in order to create a *new* one and
+> never modifies it.
+>
+> **Metadata is deliberately out of scope here.** A published record's metadata
+> *can* legitimately be changed in place, so "never target a published record" is
+> the wrong rule for it. That is 13.3, and it stays open.
+
+### 13.1 Where "draft" lives today (audit, for reference)
+
+| Surface | How draft-ness is decided | Status |
+|---|---|---|
+| `download_file`, `download_files`, `list_files` | `is_draft(record_id)`, then the matching listing endpoint; content follows the listing's `content_url`, so the two endpoints are never told apart twice | ✅ |
+| **file writes** — `upload_file(s)`, `mirror_files`, `delete_file(s)`, `delete_all_files`, `import_files` | hard-coded `/draft` in the URL | ✅ in effect, see 13.2 |
+| **metadata / lifecycle** — `update_metadata`, `publish` | hard-coded `/draft` in the URL | open question, see 13.3 |
+| `new_version` | `POST /api/records/{id}/versions` — published by design | ✅ the documented exception |
+| `is_draft(record_id, *, files_based=True)` | the question itself: published first, then draft | ✅ for files, `NotImplementedError` for metadata (13.3) |
+| `ZenodoInteractor.*` (legacy) | the legacy deposit API's own draft rules | legacy; dies with Parts 6/8, not worth hardening |
+
+No public method takes a `draft` argument. The only knob left is `is_draft`'s
+`files_based`, which exists solely to refuse the case in 13.3.
+
+### 13.2 The invariant today: upheld, but by Zenodo rather than by us
+
+There are **eight** mutating requests in `ZenodoClient`. Five are file writes
+(`delete_file`, `_initialise_file`, `_upload_file_content`, `_commit_file`,
+`import_files`), two are metadata/lifecycle (`update_metadata`, `publish`), and
+one is `new_version`. All seven of the first two groups are addressed to
+`/api/records/{id}/draft/...`, and nothing in the client ever issues `POST
+/api/records/{id}/draft` — **we never create an edit draft of a published
+record.**
+
+For file writes, that holds up under both reachable states of a published record:
+
+| | No edit draft | Has an edit draft |
+|---|---|---|
+| `upload_*`, `delete_*`, `mirror_files` | `404` — refused | `403 "Bucket is locked for modifications."` — refused (verified in Part 5) |
+| `_diff_files` / `_list_files_at(draft=True)` | `404` | `200`, listing the published files |
+| `import_files` | `404` | sees files already there, returns `False` — a silent no-op |
+
+**So there is no correctness hole on the file side: Zenodo refuses every file
+write against a published record.** This is worth stating plainly, because it sets
+the priority — the work below is hardening and error quality, not a bug fix, and
+it does not need to block Part 6.
+
+What is still worth doing, and why:
+
+1. **The guarantee is currently the server's, not ours.** It rests on Zenodo
+   continuing to lock published buckets. Checking it ourselves is the same
+   standing-guard argument as Part 12's scheduled CI run: it turns "Zenodo changed
+   the rules" into a clear failure rather than a surprise.
+2. **The failure lands in the wrong place.** With an edit draft present, the file
+   *listing* succeeds, so `mirror_files` computes a plausible diff and only fails
+   once it starts issuing requests. Failing at the front door is better than
+   failing halfway through a batch.
+3. **The error is unhelpful.** A bare `404` or `403` does not tell the user the
+   thing they need to hear, which is "this record is published — use
+   `new_version`".
+4. **`import_files` reports success-ish.** Returning `False` means "already had
+   files", which on a published record is misleading — nothing was inherited and
+   nothing ever could be.
+
+**The fix: `_assert_writable(record_id)` at the top of every public file-write
+method**, raising `RecordNotWritableError` unless `is_draft(record_id,
+files_based=True)` is `True`.
+
+- **Cost**: one `GET` per write *call* (not per file), which `upload_files`
+  amortises over the whole batch.
+- **Race-safe in the direction that matters.** The guard says draft, the record is
+  published, the write then fails at the server (`404`/`403`) — so the guard never
+  lets through a write the server would accept. The other direction cannot happen:
+  published is terminal, so a `False` never goes stale. See 13.4.
+- **Not applied to `update_metadata` or `publish`.** Those are 13.3's problem, and
+  guarding them now would pre-empt a design decision we have not made — it would
+  rule out in-place metadata correction, which is a feature Zenodo genuinely
+  offers.
+
+### 13.3 Metadata: still not thought through — keep the `NotImplementedError`
+
+`is_draft(..., files_based=False)` raises `NotImplementedError` and **stays that
+way for now**. This is a deliberate placeholder, not an oversight.
+
+For files, "draft or published" is a clean binary and the ID answers it: a
+published record's files are locked, so an edit draft of a published record *is*
+the published record as far as files are concerned. For metadata that split does
+not hold. A published record's metadata **can** be changed in place, by taking an
+edit draft, editing it and publishing again under the same ID and DOI. So a
+published record can simultaneously have live metadata and pending, unpublished
+metadata, and "what is this record's metadata?" has two legitimate answers.
+
+Concretely, `update_metadata` and `publish` behave like this against a published
+record which has an edit draft: **both succeed**, and the pair of them changes a
+live public record's metadata under the same ID and DOI. That is not a bug — it is
+Zenodo's in-place correction feature working — but we have not decided whether we
+want it reachable, and if so how deliberately.
+
+What has to be decided:
+
+- **Which metadata does a read return** — the published metadata, or the edit
+  draft's pending changes if there are any? These differ, and callers plausibly
+  want either.
+- **Whether `update_metadata` should create the draft it needs.** It is `PUT
+  /api/records/{id}/draft` today, which `404`s on a published record with no edit
+  draft. §1.2.1's `get_or_create_draft` is the missing piece.
+- **Whether in-place correction is opt-in.** The likely shape: `update_metadata`
+  refuses a published record by default, and correcting one means explicitly
+  obtaining the edit draft first — so a caller cannot alter a public record
+  without having said that is what they meant.
+- **Whether the answer stays one boolean.** It probably does not — "is this
+  published?" and "does it have unpublished changes?" are two questions, and
+  `is_draft` currently answers only the first.
+
+This is Part 6's problem (it is the same schema work), and the
+`NotImplementedError` message should be the thing that surfaces it.
+
+### 13.4 The publish race
+
+The only transition that matters is **draft → published**, and it is one-way.
+That, plus the fact that `is_draft` **checks the published endpoint first**, gives
+a property worth writing down so nobody "tidies" the order later:
+
+> `is_draft` can never return the *wrong* answer. A `False` came from finding the
+> published record, and published is terminal. A `True` came from not finding it,
+> which was true at that instant.
+
+What it *can* do is fail, or go stale between the check and the act. Four windows,
+all low-probability (they need someone else to publish the record mid-call), none
+of which risks data:
+
+1. **`is_draft` raises a spurious `RecordNotFoundError`.** Published check `404`s
+   (still a draft), the record is published, draft check `404`s (publishing
+   removes the draft). We then claim a record that exists and is now public cannot
+   be found. **Fix:** re-check `/api/records/{id}` once on the error path, before
+   raising. Costs nothing in the normal case.
+2. **`list_files` fails with a bare `404`.** `is_draft` said draft, the publish
+   lands, `/draft/files` is gone. **Fix:** on `404` from the draft listing, fall
+   back to the published listing once.
+3. **A download dies mid-transfer.** The listing handed out draft `content_url`s
+   which stop resolving. `should_retry_transfer` does not retry `404`, so this
+   fails fast rather than burning five attempts — but the message is a raw `404`.
+   **Fix (optional):** re-resolve the listing once on `404` and retry.
+4. **A file write fails with a bare `404`/`403`.** The guard passes, the publish
+   lands, and the write hits a record that is now published. The guard cannot
+   prevent this one — nothing can, the state changed after the check — and Zenodo
+   refuses the write either way, so the job is purely to report it well.
+   **Fix:** catch the `404` (no draft) and the `403` (bucket locked) at the write
+   sites and raise the same error the guard raises, naming `new_version` as the way
+   forward, so the two paths are indistinguishable to the caller.
+
+**No data-loss risk in any of these.** `mirror_files` deletes before uploading, but
+a delete against a locked bucket is refused with `403`, so an unlucky publish
+cannot empty a record.
+
+**Design alternative considered and rejected for now:** have `list_files` try the
+published listing first and fall back to the draft listing, using `is_draft` only
+to build the diagnostic error when both fail. That closes races 1 and 2 by
+construction and costs one fewer request in both the draft and published cases.
+It is the better shape, but it moves the resolution out of `is_draft` and is a
+bigger change than the targeted fallbacks above; revisit when Part 6 forces
+`is_draft` open anyway.
+
+### 13.5 Implementation sequence
+
+Steps 1–3 are the file-write invariant. **None of it is urgent** — 13.2 establishes
+that Zenodo already refuses every file write against a published record — so this
+can land whenever it is convenient, and does not gate Part 6. Step 5 is the one
+that does need Part 6.
+
+1. **`RecordNotWritableError`** (`exceptions.py`) — "record X on <domain> is
+   published, so its files cannot be changed. To release a change, create a new
+   version with `new_version`." Carries `record_id` and the domain, in the style of
+   `RecordNotFoundError`. Nothing depends on this step, so it goes first. Note the
+   message says *files*, not "files and metadata" — 13.3 is unsettled and the error
+   should not assert something we have not decided.
+
+2. **`_assert_writable(record_id)` on every public file-write method** —
+   `upload_file`, `upload_files`, `mirror_files`, `delete_file`, `delete_files`,
+   `delete_all_files`, `import_files`. Calls `is_draft(record_id,
+   files_based=True)` and raises `RecordNotWritableError` unless it is `True`.
+   - **Not** on `new_version` — the documented exception; its docstring should say
+     so.
+   - **Not** on `update_metadata` or `publish` — 13.3, deliberately left alone.
+   - Watch the call graph: `mirror_files` → `delete_files` → `delete_file` and
+     `upload_files` → `upload_file` would each re-check. Guard at the public entry
+     points only and let the private helpers stay unguarded, or the per-file
+     methods will add a `GET` per file. This is the one place to be careful.
+   - While here, fix `import_files`' misleading `False` on a published record: the
+     guard fires before the "already has files" check, so it becomes an error
+     rather than a no-op.
+
+3. **Translate the late failures** (race window 4) — `404`/`403` from a file-write
+   site becomes the same `RecordNotWritableError`, so a record published between
+   the guard and the write is reported identically to one that was published all
+   along.
+
+4. **Close the read-side race windows** (1–3 of 13.4) — `is_draft` re-checks the
+   published endpoint before raising `RecordNotFoundError`; `list_files` falls back
+   to the published listing on a `404` from the draft listing; optionally
+   re-resolve a download's listing once on `404`. Independent of steps 1–3 and can
+   land either side of them.
+
+5. **Settle metadata (13.3) as part of Part 6**, with `get_or_create_draft` from
+   §1.2.1 — including whether `update_metadata` and `publish` get a guard of their
+   own and what the opt-in to in-place correction looks like. Until this lands,
+   keep the `NotImplementedError`.
+
+**Tests** (Part 12). Steps 1–4 are unit-level with a recording session — the races
+are not reproducible against the live API:
+
+- every file-write method against a published record raises
+  `RecordNotWritableError`, parametrised over the methods so that a new file-write
+  method which forgets the guard fails the suite;
+- both published shapes are covered: no edit draft (`404`) and with an edit draft
+  (listing `200`, then `403`) — the second is the one that currently fails late;
+- `new_version` against a published record still works — the exception stays an
+  exception;
+- a file write whose guard passes but whose request `404`s/`403`s raises the same
+  error;
+- `is_draft` re-checks before raising `RecordNotFoundError`; the draft listing
+  `404` falls back to the published listing.
+
+Live (sandbox, `@pytest.mark.zenodo_token`): publish a draft, then confirm
+`upload_files` and `delete_all_files` against it both raise
+`RecordNotWritableError`. Leave `update_metadata` out of the live suite until 13.3
+is settled — against a published record it currently *succeeds*, and a test which
+pins that in place would be pinning the wrong behaviour.
+
+---
+
 ## Suggested sequencing
 
 0. ~~**`copier update` (Part 0)** — refresh the template from `v0.14.2`, keep
@@ -1587,8 +1824,15 @@ On top of per-endpoint coverage:
    the top of 1.1.
 2. **Read paths** — `get_record`, `get_draft`, `get_metadata`, `get_citation`
    (Part 10), `list_files`. Cheap, and they exercise the transport.
+2b. **File-write guard (Part 13.5, steps 1–4)** — `RecordNotWritableError` and
+   `_assert_writable` on the file-write methods, plus the race-window fixes. Small
+   and self-contained, and **not urgent**: Zenodo already refuses these writes
+   (13.2), so this is hardening and error quality. Slot it in wherever convenient;
+   it does not gate step 3.
 3. **Metadata (Part 6)** — schema rewrite + `load_metadata` + validation. Biggest
-   item; do it early so everything downstream uses the right shape.
+   item; do it early so everything downstream uses the right shape. Part 13.3 —
+   the `is_draft(files_based=False)` `NotImplementedError`, and whether
+   `update_metadata`/`publish` may target a published record — is settled here.
 4. **Write paths** — `create_record`, `get_or_create_draft` (Part 1.2.1),
    `update_metadata`, `publish`, `reserve_doi`, `new_version` / `import_files`,
    `delete_files`.
