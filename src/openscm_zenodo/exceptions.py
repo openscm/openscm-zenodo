@@ -9,6 +9,7 @@ so `except ZenodoError` catches everything we raise on purpose.
 from __future__ import annotations
 
 import json
+from collections.abc import Collection
 from typing import TYPE_CHECKING, Any
 
 from openscm_zenodo.logging import mask_token
@@ -117,6 +118,110 @@ class ChecksumMismatchError(ZenodoError):
             f"Locally we calculated {local_md5!r}, "
             f"Zenodo reports {remote_md5!r}. "
             "Most likely explanation: the transfer was corrupted."
+        )
+
+        super().__init__(msg)
+
+
+class RecordNotFoundError(ZenodoError):
+    """
+    Raised when we cannot find a record which was asked for
+    """
+
+    def __init__(
+        self, record_id: str, *, zenodo_domain: str, token_source: str | None
+    ) -> None:
+        """
+        Initialise
+
+        Parameters
+        ----------
+        record_id
+            ID of the record we could not find
+
+        zenodo_domain
+            The Zenodo domain we looked on
+
+        token_source
+            Where the token we authenticated with came from, if we had one.
+
+            `None` means we had no token.
+        """
+        self.record_id = record_id
+        self.zenodo_domain = zenodo_domain
+        self.token_source = token_source
+
+        if token_source is not None:
+            msg = (
+                f"You asked for record {record_id!r} on {zenodo_domain}, "
+                f"but we could not find it, even using {token_source}. "
+                "Please check the record ID. "
+                "Also check that the token is for the domain above: "
+                "sandbox and production tokens are not interchangeable."
+            )
+
+        else:
+            msg = (
+                f"You asked for record {record_id!r} on {zenodo_domain}, "
+                "but we could not find it, "
+                "and we had no token to authenticate with. "
+                "Drafts and restricted records are not visible without one, "
+                "so if this record is either of those, "
+                "supply a token which has access to it. "
+                "Otherwise, please check the record ID."
+            )
+
+        super().__init__(msg)
+
+
+class FileNotOnRecordError(ZenodoError):
+    """
+    Raised when a file which was asked for is not on the record
+    """
+
+    def __init__(
+        self,
+        filenames: str | Collection[str],
+        *,
+        record_id: str,
+        available: Collection[str],
+    ) -> None:
+        """
+        Initialise
+
+        Parameters
+        ----------
+        filenames
+            Name, or names, which are not there.
+
+        record_id
+            ID of the record which does not have them
+
+        available
+            Names of the files the record does have.
+
+            These are listed in the message, because the usual cause
+            is a typo or a name which changed between versions.
+        """
+        if isinstance(filenames, str):
+            filenames = (filenames,)
+
+        self.filenames = tuple(filenames)
+        self.record_id = record_id
+        self.available = tuple(available)
+
+        if available:
+            available_formatted = ", ".join(repr(name) for name in sorted(available))
+
+        else:
+            available_formatted = "nothing"
+
+        missing_formatted = ", ".join(repr(name) for name in self.filenames)
+        file_or_files = "file" if len(self.filenames) == 1 else "files"
+
+        msg = (
+            f"Record {record_id!r} has no {file_or_files} {missing_formatted}. "
+            f"Available: {available_formatted}."
         )
 
         super().__init__(msg)

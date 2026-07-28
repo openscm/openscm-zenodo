@@ -97,17 +97,19 @@ BOTH_ENV = {"ZENODO_TOKEN": "prod-token", "ZENODO_SANDBOX_TOKEN": "sandbox-token
     ),
 )
 def test_resolve_token(token, zenodo_domain, env, exp):
-    assert resolve_token(token, zenodo_domain=zenodo_domain, env=env) == exp
+    assert resolve_token(token, zenodo_domain=zenodo_domain, env=env).token == exp
 
 
 def test_resolve_token_uses_os_environ_by_default(monkeypatch):
     monkeypatch.setenv("ZENODO_TOKEN", "from-os-environ")
 
-    assert resolve_token() == "from-os-environ"
+    assert resolve_token().token == "from-os-environ"  # noqa: S105
 
 
 def test_resolve_token_required():
-    resolved = resolve_token(None, env={"ZENODO_TOKEN": "prod-token"}, required=True)
+    resolved = resolve_token(
+        None, env={"ZENODO_TOKEN": "prod-token"}, required=True
+    ).token
 
     assert resolved == "prod-token"
 
@@ -183,7 +185,7 @@ def test_load_env_file(tmp_path, monkeypatch):
 
     assert load_env_file(env_file) == env_file
     assert os.environ["ZENODO_TOKEN"] == "from-dot-env"  # noqa: S105
-    assert resolve_token() == "from-dot-env"
+    assert resolve_token().token == "from-dot-env"  # noqa: S105
 
 
 def test_load_env_file_does_not_override(tmp_path, monkeypatch):

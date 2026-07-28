@@ -18,7 +18,7 @@ from openscm_zenodo.exceptions import (
     MissingTokenError,
     ZenodoHTTPError,
 )
-from openscm_zenodo.zenodo import ZenodoClient, should_retry_upload
+from openscm_zenodo.zenodo import ZenodoClient, should_retry_transfer
 
 RECORD_ID = "1234"
 
@@ -36,12 +36,16 @@ def to_upload(tmp_path):
 
 def make_commit_response(make_response, md5, *, filename="data.nc"):
     """Build the response Zenodo gives when a file is committed"""
+    quoted = urllib.parse.quote(filename, safe="")
+    draft_files_url = f"https://zenodo.org/api/records/{RECORD_ID}/draft/files"
+
     return make_response(
         json_body={
             "key": filename,
             "size": 23,
             "checksum": f"md5:{md5}",
             "status": "completed",
+            "links": {"content": f"{draft_files_url}/{quoted}/content"},
         }
     )
 
@@ -301,7 +305,7 @@ def test_upload_file_retries_a_checksum_mismatch(
 
     assert entry.checksum == f"md5:{md5}"
     assert len(session.calls) == 6
-    assert any("Upload attempt 1 failed" in message for message in log_messages)
+    assert any("Transfer attempt 1 failed" in message for message in log_messages)
 
 
 def test_upload_file_cleans_up_after_giving_up(
@@ -368,7 +372,7 @@ def test_upload_file_returns_a_file_entry(upload_client, to_upload):
 
     entry = client.upload_file(RECORD_ID, path)
 
-    assert entry.key == "data.nc"
+    assert entry.filename == "data.nc"
     assert entry.size == 23
     assert entry.status == "completed"
     assert entry.checksum == f"md5:{md5}"
@@ -408,8 +412,8 @@ def test_delete_file(no_token_in_env, make_recording_session, make_response):
         pytest.param(ValueError("boom"), False, id="not-a-transfer-failure"),
     ),
 )
-def test_should_retry_upload(exc, exp):
-    assert should_retry_upload(exc) is exp
+def test_should_retry_transfer(exc, exp):
+    assert should_retry_transfer(exc) is exp
 
 
 @pytest.mark.parametrize(
@@ -423,10 +427,10 @@ def test_should_retry_upload(exc, exp):
         (404, False),
     ),
 )
-def test_should_retry_upload_http_errors(make_response, status_code, exp):
+def test_should_retry_transfer_http_errors(make_response, status_code, exp):
     """
     Zenodo answered, so only try again if the answer suggests it is worth it
     """
     exc = ZenodoHTTPError(make_response(status_code=status_code))
 
-    assert should_retry_upload(exc) is exp
+    assert should_retry_transfer(exc) is exp

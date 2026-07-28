@@ -95,6 +95,7 @@ def test_import_files_skips_a_draft_which_already_has_files(
                             "size": 1,
                             "checksum": "md5:abc",
                             "status": "completed",
+                            "links": {"content": "https://zenodo.org/a.txt"},
                         }
                     ]
                 }

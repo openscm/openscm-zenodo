@@ -11,9 +11,11 @@ import hashlib
 
 import pytest
 
-from openscm_zenodo.zenodo import ZenodoClient
+from openscm_zenodo.exceptions import RecordNotFoundError, ZenodoHTTPError
+from openscm_zenodo.zenodo import ZenodoClient, ZenodoDomain
 
 RECORD_ID = "1234"
+DRAFT_FILES_URL = f"https://zenodo.org/api/records/{RECORD_ID}/draft/files"
 
 
 def md5_of(contents):
@@ -59,12 +61,32 @@ class FakeZenodo:
             "size": len(contents),
             "checksum": f"md5:{md5_of(contents)}",
             "status": "completed",
+            "links": {"content": f"{DRAFT_FILES_URL}/{name}/content"},
         }
 
-    def request(self, method, url, **kwargs):
+    def request(self, method, url, **kwargs):  # noqa: PLR0911
         """Answer a request the way Zenodo would"""
         self.calls.append((method, url))
-        path = url.split("/draft", 1)[-1]
+
+        prefix = f"https://zenodo.org/api/records/{RECORD_ID}"
+        if not url.startswith(f"{prefix}/draft"):
+            # This fake is an unpublished draft,
+            # so the published endpoints have nothing at them
+            return self.make_response(
+                status_code=404, json_body={"message": "Not found."}
+            )
+
+        path = url[len(f"{prefix}/draft") :]
+
+        if method == "GET" and path == "":
+            # An unpublished draft, which is what `is_draft` asks about
+            return self.make_response(
+                json_body={
+                    "id": int(RECORD_ID),
+                    "is_draft": True,
+                    "is_published": False,
+                }
+            )
 
         if method == "GET" and path == "/files":
             return self.make_response(
@@ -129,18 +151,174 @@ def test_list_files(fake_zenodo):
     assert files["a.txt"].size == len(b"contents of a")
 
 
-def test_list_files_published(no_token_in_env, make_recording_session, make_response):
+def test_is_draft(fake_zenodo):
     """
-    A published record's files come from a different endpoint, and need no token
+    No published record but a draft we can see means it is a draft
     """
-    session = make_recording_session([make_response(json_body={"entries": []})])
+    client, zenodo = fake_zenodo()
+
+    assert client.is_draft(RECORD_ID) is True
+
+    assert [url for _, url in zenodo.calls] == [
+        f"https://zenodo.org/api/records/{RECORD_ID}",
+        f"https://zenodo.org/api/records/{RECORD_ID}/draft",
+    ]
+
+
+def test_is_draft_published(no_token_in_env, make_recording_session, make_response):
+    """
+    Finding the published record answers the question on its own
+
+    A published record may also have a draft of its own,
+    for correcting its metadata, but its files are locked either way,
+    so there is no reason to go looking for one.
+    """
+    session = make_recording_session([make_response(json_body={"id": 1234})])
+    client = ZenodoClient(token="a-token", session=session)  # noqa: S106
+
+    assert client.is_draft(RECORD_ID) is False
+    assert len(session.calls) == 1
+
+
+@pytest.mark.parametrize("status_code", (403, 404))
+def test_is_draft_record_not_found_with_a_token(
+    no_token_in_env, make_recording_session, make_response, status_code
+):
+    """
+    Nothing published and no draft we can see means we say we cannot find it
+    """
+    session = make_recording_session(
+        [make_response(status_code=status_code) for _ in range(2)]
+    )
+    client = ZenodoClient(token="a-token", session=session)  # noqa: S106
+
+    with pytest.raises(RecordNotFoundError) as exc_info:
+        client.is_draft(RECORD_ID)
+
+    msg = str(exc_info.value)
+    assert RECORD_ID in msg
+    assert "even using the token you supplied" in msg
+    assert exc_info.value.token_source == "the token you supplied"  # noqa: S105 # a description, not a token
+
+
+def test_is_draft_record_not_found_without_a_token(
+    no_token_in_env, make_recording_session, make_response
+):
+    """
+    Without a token the record may simply not be visible, so we say so
+
+    Only published records can be seen without one,
+    so there is no point looking for a draft, and we do not.
+    """
+    session = make_recording_session([make_response(status_code=404)])
     client = ZenodoClient(session=session)
 
-    client.list_files(RECORD_ID, draft=False)
+    with pytest.raises(RecordNotFoundError) as exc_info:
+        client.is_draft(RECORD_ID)
 
-    (call,) = session.calls
-    assert call["url"] == f"https://zenodo.org/api/records/{RECORD_ID}/files"
-    assert "Authorization" not in call["headers"]
+    msg = str(exc_info.value)
+    assert RECORD_ID in msg
+    assert "no token" in msg
+    assert "supply a token" in msg
+    assert exc_info.value.token_source is None
+    # No point asking about a draft we could not see anyway
+    assert len(session.calls) == 1
+
+
+def test_is_draft_record_not_found_names_the_token_and_the_domain(
+    no_token_in_env, make_recording_session, make_response, monkeypatch
+):
+    """
+    The message pairs which token we used with which domain we used it on
+
+    A production environment variable against the sandbox, or the other way
+    round, is the usual reason a record which is definitely there is not found,
+    and seeing the two side by side is what gives that away.
+    """
+    monkeypatch.setenv("ZENODO_TOKEN", "a-production-token")
+
+    session = make_recording_session([make_response(status_code=404) for _ in range(2)])
+    client = ZenodoClient(zenodo_domain=ZenodoDomain.sandbox, session=session)
+
+    with pytest.raises(RecordNotFoundError) as exc_info:
+        client.is_draft(RECORD_ID)
+
+    msg = str(exc_info.value)
+    assert "the token from $ZENODO_TOKEN" in msg
+    assert "https://sandbox.zenodo.org" in msg
+    # The token itself is never in there
+    assert "a-production-token" not in msg
+
+
+def test_token_source_is_on_the_client(no_token_in_env, monkeypatch):
+    """
+    Which token was used is worth being able to look at, and safe to show
+    """
+    monkeypatch.setenv("ZENODO_SANDBOX_TOKEN", "a-sandbox-token")
+
+    client = ZenodoClient(zenodo_domain=ZenodoDomain.sandbox)
+
+    assert client.token_source == "the token from $ZENODO_SANDBOX_TOKEN"  # noqa: S105 # a description, not a token
+    assert "a-sandbox-token" not in repr(client)
+    assert "$ZENODO_SANDBOX_TOKEN" in repr(client)
+
+
+def test_is_draft_does_not_swallow_other_failures(
+    no_token_in_env, make_recording_session, make_response
+):
+    session = make_recording_session(
+        [make_response(status_code=500, json_body={"message": "Boom"})]
+    )
+    client = ZenodoClient(token="a-token", session=session)  # noqa: S106
+
+    with pytest.raises(ZenodoHTTPError, match="Boom"):
+        client.is_draft(RECORD_ID)
+
+
+def test_list_files_asks_whether_the_record_is_a_draft(fake_zenodo):
+    """
+    The caller does not say which, because the ID already decides it
+    """
+    client, zenodo = fake_zenodo({"a.txt": b"contents of a"})
+
+    client.list_files(RECORD_ID)
+
+    assert [url for _, url in zenodo.calls] == [
+        f"https://zenodo.org/api/records/{RECORD_ID}",
+        f"https://zenodo.org/api/records/{RECORD_ID}/draft",
+        f"https://zenodo.org/api/records/{RECORD_ID}/draft/files",
+    ]
+
+
+def test_list_files_published(no_token_in_env, make_recording_session, make_response):
+    """
+    A published record is found first time, so its files cost two calls
+    """
+    session = make_recording_session(
+        [
+            make_response(json_body={"id": 1234}),
+            make_response(json_body={"entries": []}),
+        ]
+    )
+    client = ZenodoClient(session=session)
+
+    client.list_files(RECORD_ID)
+
+    assert [call["url"] for call in session.calls] == [
+        f"https://zenodo.org/api/records/{RECORD_ID}",
+        f"https://zenodo.org/api/records/{RECORD_ID}/files",
+    ]
+    assert all("Authorization" not in call["headers"] for call in session.calls)
+
+
+def test_list_files_record_not_found(
+    no_token_in_env, make_recording_session, make_response
+):
+    session = make_recording_session([make_response(status_code=404)])
+    client = ZenodoClient(session=session)
+
+    with pytest.raises(RecordNotFoundError, match="check the record ID"):
+        client.list_files(RECORD_ID)
 
 
 def test_upload_files(fake_zenodo, local_files):

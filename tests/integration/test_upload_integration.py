@@ -32,7 +32,7 @@ def test_upload_file(sandbox_client, draft_record_id, tmp_path):
 
     entry = sandbox_client.upload_file(draft_record_id, path, progress=False)
 
-    assert entry.key == "data.txt"
+    assert entry.filename == "data.txt"
     assert entry.status == "completed"
     assert entry.checksum == f"md5:{get_file_md5(path)}"
 

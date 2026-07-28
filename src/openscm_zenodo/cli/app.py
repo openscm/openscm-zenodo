@@ -188,7 +188,7 @@ as the starting point for the next version of a deposit."""
     Retrieve metadata
     """
     zenodo_interactor = ZenodoInteractor(
-        token=resolve_token(token, zenodo_domain=zenodo_domain),
+        token=resolve_token(token, zenodo_domain=zenodo_domain).token,
         zenodo_domain=zenodo_domain,
     )
 
@@ -209,7 +209,7 @@ def retrieve_bibtex_command(
     Retrieve bibtex entry
     """
     zenodo_interactor = ZenodoInteractor(
-        token=resolve_token(token, zenodo_domain=zenodo_domain),
+        token=resolve_token(token, zenodo_domain=zenodo_domain).token,
         zenodo_domain=zenodo_domain,
     )
 
@@ -267,7 +267,7 @@ def update_metadata_command(
             zenodo_domain=zenodo_domain,
             required=True,
             description="update metadata",
-        ),
+        ).token,
         zenodo_domain=zenodo_domain,
     )
 
@@ -300,7 +300,7 @@ def upload_files_command(
             zenodo_domain=zenodo_domain,
             required=True,
             description="upload files",
-        ),
+        ).token,
         zenodo_domain=zenodo_domain,
     )
 
@@ -331,7 +331,7 @@ def remove_files_command(
             zenodo_domain=zenodo_domain,
             required=True,
             description="remove files",
-        ),
+        ).token,
         zenodo_domain=zenodo_domain,
     )
 
@@ -401,7 +401,7 @@ def create_new_version_command(  # noqa: PLR0913
             zenodo_domain=zenodo_domain,
             required=True,
             description="create a new version",
-        ),
+        ).token,
         zenodo_domain=zenodo_domain,
     )
 

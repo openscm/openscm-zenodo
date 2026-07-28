@@ -38,10 +38,11 @@ def pytest_runtest_setup(item: _pytest.python.Function) -> None:
             pytest.skip("`ZENODO_TOKEN` environment variable not set")
 
 
-def build_response(
+def build_response(  # noqa: PLR0913
     status_code=200,
     json_body=None,
     text=None,
+    content=None,
     url="https://zenodo.org/api/records/1234",
     method="GET",
 ):
@@ -61,8 +62,15 @@ def build_response(
     elif text is not None:
         response._content = text.encode()
 
+    elif content is not None:
+        response._content = content
+
     else:
         response._content = b""
+
+    # Tells `iter_content` to serve the body we just set,
+    # rather than trying to read from a raw stream which is not there
+    response._content_consumed = True
 
     return response
 

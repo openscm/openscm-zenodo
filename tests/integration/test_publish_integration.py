@@ -33,9 +33,7 @@ def test_publish(sandbox_client, draft_record_id, tmp_path):
     record = sandbox_client._request(f"/api/records/{published_id}").json()
     assert record["id"] == int(published_id)
     # The files are readable without asking for the draft
-    assert list(sandbox_client.list_files(published_id, draft=False)) == [
-        "published.txt"
-    ]
+    assert list(sandbox_client.list_files(published_id)) == ["published.txt"]
 
 
 def test_create_new_version_publish(sandbox_client, tmp_path):
@@ -54,8 +52,6 @@ def test_create_new_version_publish(sandbox_client, tmp_path):
         progress=False,
     )
 
-    assert list(sandbox_client.list_files(new_version_id, draft=False)) == [
-        "release.txt"
-    ]
+    assert list(sandbox_client.list_files(new_version_id)) == ["release.txt"]
     # A published version becomes the latest
     assert sandbox_client.get_latest_version_id(VERSIONED_RECORD_ID) == new_version_id

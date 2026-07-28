@@ -20,11 +20,11 @@ def test_list_files_published_record():
     A published record's files can be listed without a token
     """
     with ZenodoClient() as client:
-        files = client.list_files(PUBLISHED_RECORD_ID, draft=False)
+        files = client.list_files(PUBLISHED_RECORD_ID)
 
     assert files
     for name, entry in files.items():
-        assert entry.key == name
+        assert entry.filename == name
         assert entry.size > 0
         # The checksum parsing has to work against what production actually sends
         assert len(entry.md5) == MD5_HEX_LENGTH

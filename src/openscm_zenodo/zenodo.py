@@ -5,6 +5,7 @@ Zenodo interactions handling
 from __future__ import annotations
 
 import concurrent.futures
+import hashlib
 import json
 import logging
 import os
@@ -16,13 +17,11 @@ from pathlib import Path
 from types import TracebackType
 from typing import (
     Any,
-    Literal,
     NewType,
     NoReturn,
     TypeAlias,
     TypeVar,
     cast,
-    overload,
 )
 
 import requests
@@ -48,7 +47,9 @@ from openscm_zenodo.checksums import (
 )
 from openscm_zenodo.exceptions import (
     ChecksumMismatchError,
+    FileNotOnRecordError,
     MissingTokenError,
+    RecordNotFoundError,
     ZenodoError,
     ZenodoHTTPError,
 )
@@ -67,6 +68,12 @@ _LOGGER = logging.getLogger(__name__)
 
 HTTP_BAD_REQUEST = 400
 """HTTP status code Zenodo returns when it will not accept a request"""
+
+HTTP_FORBIDDEN = 403
+"""HTTP status code Zenodo returns when we may not have what we asked for"""
+
+HTTP_NOT_FOUND = 404
+"""HTTP status code Zenodo returns when there is nothing at a path"""
 
 TQDM_UPLOAD_PROGRESS_KWARGS_DEFAULT = dict(
     unit="B",
@@ -207,6 +214,30 @@ def get_zenodo_domain_url(zenodo_domain: str | ZenodoDomain) -> str:
     return zenodo_domain.rstrip("/")
 
 
+def _repr_token(token: str | None) -> str:
+    """Get the `repr` to use for a token, i.e. never the token itself"""
+    return "None" if token is None else "***"
+
+
+@define
+class ResolvedToken:
+    """
+    A token, and where it came from
+    """
+
+    token: str | None = field(repr=_repr_token)
+    """The token, if one could be resolved"""
+
+    source: str | None
+    """
+    Where the token came from, if one could be resolved
+
+    This is a description, never the token itself,
+    written so that it reads after "using",
+    for example "the token from $ZENODO_TOKEN".
+    """
+
+
 def get_token_env_vars(
     zenodo_domain: str | ZenodoDomain = ZenodoDomain.production,
 ) -> tuple[str, ...]:
@@ -240,28 +271,6 @@ def get_token_env_vars(
     return (ZENODO_TOKEN_ENV_VAR,)
 
 
-@overload
-def resolve_token(
-    token: str | None = ...,
-    *,
-    zenodo_domain: str | ZenodoDomain = ...,
-    env: Mapping[str, str] | None = ...,
-    required: Literal[False] = False,
-    description: str = ...,
-) -> str | None: ...
-
-
-@overload
-def resolve_token(
-    token: str | None = ...,
-    *,
-    zenodo_domain: str | ZenodoDomain = ...,
-    env: Mapping[str, str] | None = ...,
-    required: Literal[True],
-    description: str = ...,
-) -> str: ...
-
-
 def resolve_token(
     token: str | None = None,
     *,
@@ -269,7 +278,7 @@ def resolve_token(
     env: Mapping[str, str] | None = None,
     required: bool = False,
     description: str = "interact with Zenodo",
-) -> str | None:
+) -> ResolvedToken:
     """
     Resolve the token to use for interacting with Zenodo
 
@@ -282,7 +291,9 @@ def resolve_token(
     1. `ZENODO_SANDBOX_TOKEN`, but only if `zenodo_domain` is the sandbox
     1. `ZENODO_TOKEN`
 
-    A `.env` file is not read here.
+    A `.env` file is not read here, call
+    [`load_env_file`][openscm_zenodo.zenodo.load_env_file]
+    before this function if you need `.env` file support.
 
     Parameters
     ----------
@@ -306,7 +317,7 @@ def resolve_token(
     required
         Does the interaction we are resolving a token for require one?
 
-        The default, `False`, returns `None` if no token can be resolved,
+        The default, `False`, resolves to no token if there is none to find,
         because unauthenticated reads of public records are supported.
         Pass `True` for interactions which cannot work without a token,
         so that they fail before any request goes out.
@@ -322,9 +333,10 @@ def resolve_token(
     Returns
     -------
     :
-        The resolved token.
+        The token and where it came from.
 
-        This is `None` if no token could be resolved and `required` is `False`.
+        Both are `None` if no token could be resolved
+        and `required` is `False`.
 
     Raises
     ------
@@ -333,23 +345,29 @@ def resolve_token(
 
     Examples
     --------
-    >>> resolve_token("supplied-directly", env={})
+    >>> resolve_token("supplied-directly", env={}).token
     'supplied-directly'
+    >>> resolve_token("supplied-directly", env={}).source
+    'the token you supplied'
 
-    >>> resolve_token(env={"ZENODO_TOKEN": "from-the-environment"})
+    >>> resolve_token(env={"ZENODO_TOKEN": "from-the-environment"}).token
     'from-the-environment'
+    >>> resolve_token(env={"ZENODO_TOKEN": "abc"}).source
+    'the token from $ZENODO_TOKEN'
 
     Sandbox tokens are only used with the sandbox domain
 
     >>> env = {"ZENODO_SANDBOX_TOKEN": "sandbox-token", "ZENODO_TOKEN": "prod-token"}
-    >>> resolve_token(env=env, zenodo_domain=ZenodoDomain.sandbox)
+    >>> resolve_token(env=env, zenodo_domain=ZenodoDomain.sandbox).token
     'sandbox-token'
-    >>> resolve_token(env=env, zenodo_domain=ZenodoDomain.production)
+    >>> resolve_token(env=env, zenodo_domain=ZenodoDomain.production).token
     'prod-token'
 
-    If nothing resolves, we return `None`
+    If nothing resolves, there is no token and no source
 
-    >>> resolve_token(env={}) is None
+    >>> resolve_token(env={}).token is None
+    True
+    >>> resolve_token(env={}).source is None
     True
 
     unless the interaction requires a token
@@ -359,24 +377,23 @@ def resolve_token(
     ...
     openscm_zenodo.exceptions.MissingTokenError
     """
-    zenodo_domain_url = get_zenodo_domain_url(zenodo_domain)
-    env_vars = get_token_env_vars(zenodo_domain)
-
     resolved = None
 
     if token:
         logger.debug("Using the token supplied by the caller")
-        resolved = token
+        resolved = ResolvedToken(token=token, source="the token you supplied")
 
     else:
         if env is None:
             env = os.environ
 
-        for env_var in env_vars:
+        for env_var in get_token_env_vars(zenodo_domain):
             env_token = env.get(env_var)
             if env_token:
                 logger.debug(f"Using the token from ${env_var}")
-                resolved = env_token
+                resolved = ResolvedToken(
+                    token=env_token, source=f"the token from ${env_var}"
+                )
                 break
 
     if resolved is None:
@@ -385,9 +402,11 @@ def resolve_token(
         if required:
             raise MissingTokenError(
                 description,
-                zenodo_domain=zenodo_domain_url,
-                env_vars=env_vars,
+                zenodo_domain=get_zenodo_domain_url(zenodo_domain),
+                env_vars=get_token_env_vars(zenodo_domain),
             )
+
+        resolved = ResolvedToken(token=None, source=None)
 
     return resolved
 
@@ -532,8 +551,13 @@ class FileEntry:
     A file which is on a record as Zenodo describes it
     """
 
-    key: str
-    """Name of the file, as it appears on Zenodo"""
+    filename: str
+    """
+    Name of the file, as it appears on Zenodo
+
+    Zenodo calls this the file's `key`;
+    we call it `filename` throughout, as the rest of this package does.
+    """
 
     size: int
     """Size of the file in bytes"""
@@ -548,6 +572,15 @@ class FileEntry:
     `"completed"` once the file has been committed,
     `"pending"` while it is still being uploaded.
     A draft which has a pending file on it cannot be published.
+    """
+
+    content_url: str
+    """
+    URL to download the file's content from
+
+    This comes from Zenodo rather than being built by us,
+    which is what saves downloads from having to work out
+    whether the file sits behind the published or the draft endpoint.
     """
 
     raw: dict[str, Any] = field(repr=False)
@@ -565,6 +598,11 @@ class FileEntry:
         """
         Initialise from Zenodo's description of a file
 
+        Everything we model is pulled out here,
+        so a response which is not shaped the way we expect
+        fails at the point we read it,
+        rather than much later when something reaches for the missing piece.
+
         Parameters
         ----------
         raw
@@ -574,12 +612,18 @@ class FileEntry:
         -------
         :
             Initialised `FileEntry`
+
+        Raises
+        ------
+        KeyError
+            `raw` is not shaped the way Zenodo describes a file
         """
         return cls(
-            key=raw["key"],
+            filename=raw["key"],
             size=raw["size"],
             checksum=raw["checksum"],
             status=raw["status"],
+            content_url=raw["links"]["content"],
             raw=raw,
         )
 
@@ -676,7 +720,7 @@ def _run_in_parallel(
     return [future.result() for future in futures]
 
 
-def should_retry_upload(
+def should_retry_transfer(
     exc: BaseException,
     *,
     retry_status_forcelist: tuple[int, ...] = (429, 500, 502, 503, 504),
@@ -711,9 +755,38 @@ def should_retry_upload(
     return isinstance(exc, requests.exceptions.RequestException)
 
 
-def _log_upload_retry(retry_state: RetryCallState) -> None:
+def _build_transfer_retrying(max_attempts: int) -> Retrying:
     """
-    Log that an upload is about to be tried again
+    Build the retry policy for transferring a file's content
+
+    Uploads and downloads share this.
+    Both uploads and downloads stream,
+    so neither can be retried by the transport layer
+    (see [`should_retry_transfer`][openscm_zenodo.zenodo.should_retry_transfer]).
+    Instead, both start from the beginning when they are tried again.
+
+    Parameters
+    ----------
+    max_attempts
+        Maximum number of attempts before giving up
+
+    Returns
+    -------
+    :
+        The retry policy
+    """
+    return Retrying(
+        retry=retry_if_exception(should_retry_transfer),
+        stop=stop_after_attempt(max_attempts),
+        wait=wait_exponential_jitter(initial=1.0, max=60.0),
+        before_sleep=_log_transfer_retry,
+        reraise=True,
+    )
+
+
+def _log_transfer_retry(retry_state: RetryCallState) -> None:
+    """
+    Log that a transfer is about to be tried again
 
     Parameters
     ----------
@@ -734,14 +807,9 @@ def _log_upload_retry(retry_state: RetryCallState) -> None:
     )
 
     logger.warning(
-        f"Upload attempt {retry_state.attempt_number} failed with {exc!r}. "
+        f"Transfer attempt {retry_state.attempt_number} failed with {exc!r}. "
         f"{trying_again}"
     )
-
-
-def _repr_token(token: str | None) -> str:
-    """Get the `repr` to use for a token, i.e. never the token itself"""
-    return "None" if token is None else "***"
 
 
 def _repr_session(session: requests.Session | None) -> str:
@@ -807,6 +875,16 @@ class ZenodoClient:
     not written onto the session's headers.
     """
 
+    token_source: str | None = field(init=False, default=None)
+    """
+    Where [`token`][openscm_zenodo.zenodo.ZenodoClient.token] came from
+
+    Worked out during initialisation, see
+    [`resolve_token`][openscm_zenodo.zenodo.resolve_token].
+    This is a description, never the token itself, so it is safe to show,
+    and it is what lets errors say which token they used.
+    """
+
     _owns_session: bool = field(init=False, default=False)
     """
     Did we build [`session`][openscm_zenodo.zenodo.ZenodoClient.session] ourselves?
@@ -822,7 +900,9 @@ class ZenodoClient:
 
         We resolve the token and build a session, if we were not given one.
         """
-        self.token = resolve_token(self.token, zenodo_domain=self.zenodo_domain)
+        resolved = resolve_token(self.token, zenodo_domain=self.zenodo_domain)
+        self.token = resolved.token
+        self.token_source = resolved.source
 
         if self.session is None:
             self.session = build_session()
@@ -1393,13 +1473,7 @@ class ZenodoClient:
                 local_md5 if local_md5 is not None else get_file_md5(path)
             )
 
-        retrying = Retrying(
-            retry=retry_if_exception(should_retry_upload),
-            stop=stop_after_attempt(max_attempts),
-            wait=wait_exponential_jitter(initial=1.0, max=60.0),
-            before_sleep=_log_upload_retry,
-            reraise=True,
-        )
+        retrying = _build_transfer_retrying(max_attempts)
 
         try:
             entry = retrying(
@@ -1421,9 +1495,148 @@ class ZenodoClient:
 
         return entry
 
-    def list_files(
-        self, record_id: str | RecordID, *, draft: bool = True
+    def _list_files_at(
+        self, record_id: str | RecordID, *, draft: bool
     ) -> dict[str, FileEntry]:
+        """
+        List the files behind one of the two file endpoints
+
+        Parameters
+        ----------
+        record_id
+            ID of the record whose files to list
+
+        draft
+            Is the record a draft, rather thana published record?
+
+        Returns
+        -------
+        :
+            The files, keyed by their name on Zenodo
+        """
+        part = "/draft/files" if draft else "/files"
+        response = self._request(
+            f"/api/records/{record_id}{part}",
+            # A published record's files can be public, a draft's never are
+            requires_auth=draft,
+            description=f"list the files on record {record_id!r}",
+        )
+
+        entries = cast(list[dict[str, Any]], response.json()["entries"])
+        parsed = [FileEntry.from_json(entry) for entry in entries]
+
+        return {entry.filename: entry for entry in parsed}
+
+    def _can_see(self, path: str, *, requires_auth: bool, description: str) -> bool:
+        """
+        Is there something at this path which we are allowed to have?
+
+        Parameters
+        ----------
+        path
+            Path to look at
+
+        requires_auth
+            Does looking there require a token?
+
+        description
+            Description of what we are looking for, used in error messages
+
+        Returns
+        -------
+        :
+            `True` if there is something there and we may have it.
+
+            `False` covers both "there is nothing there"
+            and "there is, but not for you",
+            because from out here those are the same thing.
+        """
+        try:
+            self._request(path, requires_auth=requires_auth, description=description)
+
+        except ZenodoHTTPError as exc:
+            nothing_for_us = (HTTP_FORBIDDEN, HTTP_NOT_FOUND)
+            if exc.response.status_code not in nothing_for_us:
+                raise
+
+            return False
+
+        return True
+
+    def is_draft(self, record_id: str | RecordID, *, files_based: bool = True) -> bool:
+        """
+        Is this record an unpublished draft?
+
+        Parameters
+        ----------
+        record_id
+            ID of the record to ask about
+
+        files_based
+            Are we considering this on a files basis?
+
+            If `False`, we are considering this on a metadata basis,
+            which is more complicated, see the notes.
+            There is no default: which basis you mean changes the answer,
+            so it has to be said.
+
+        Returns
+        -------
+        :
+            `True` if the record is an unpublished draft
+
+        Raises
+        ------
+        RecordNotFoundError
+            We could not find the record at all
+
+        NotImplementedError
+            `files_based` is `False`: we don't need
+            and haven't considered this case yet.
+
+        Notes
+        -----
+        On zenodo, a published record can also have a draft of its own.
+        This is not an unpublished record:
+        a published record's *metadata* can be corrected in place,
+        by taking a draft of it, changing the metadata and publishing again
+        (keeping the same ID and DOI).
+        However, the *files* of a published record cannot be changed that way,
+        Zenodo locks them when the record is published.
+        So, as far as files are concerned, such a record is simply published,
+        and that is what we report.
+        We never look for a draft of a published record,
+        because finding the published record already answered the question.
+        """
+        if not files_based:
+            msg = f"We haven't figured out the correct behaviour for {files_based=} yet"
+            raise NotImplementedError(msg)
+
+        description = f"work out whether record {record_id!r} is a draft"
+
+        if self._can_see(
+            f"/api/records/{record_id}",
+            requires_auth=False,
+            description=description,
+        ):
+            return False
+
+        # It only makes sense to look for draft information
+        # if we have a token (draft information can't be accessed otherwise).
+        if self.token and self._can_see(
+            f"/api/records/{record_id}/draft",
+            requires_auth=True,
+            description=description,
+        ):
+            return True
+
+        raise RecordNotFoundError(
+            str(record_id),
+            zenodo_domain=self.zenodo_domain_url,
+            token_source=self.token_source,
+        )
+
+    def list_files(self, record_id: str | RecordID) -> dict[str, FileEntry]:
         """
         List the files on a record
 
@@ -1432,31 +1645,14 @@ class ZenodoClient:
         record_id
             ID of the record whose files to list
 
-        draft
-            Should we list the record's draft's files,
-            rather than the published record's?
-
-            The default, `True`, is the draft,
-            because that is what the file-writing methods work on.
-
-            [Would this be better worded as simply,
-            "Whether `record_id` refers to a draft of published record?"]
-
         Returns
         -------
         :
             The record's files, keyed by their name on Zenodo
         """
-        part = "/draft/files" if draft else "/files"
-        response = self._request(
-            f"/api/records/{record_id}{part}",
-            requires_auth=draft,
-            description=f"list the files on record {record_id!r}",
+        return self._list_files_at(
+            record_id, draft=self.is_draft(record_id, files_based=True)
         )
-
-        entries = cast(list[dict[str, Any]], response.json()["entries"])
-
-        return {entry["key"]: FileEntry.from_json(entry) for entry in entries}
 
     def _diff_files(
         self, record_id: str | RecordID, paths: Collection[Path]
@@ -1480,7 +1676,7 @@ class ZenodoClient:
         :
             The difference between `paths` and the record's files
         """
-        remote = self.list_files(record_id)
+        remote = self._list_files_at(record_id, draft=True)
         # Zenodo has no directories, so a local file's name is its name on Zenodo
         want = {path.name: path for path in paths}
 
@@ -1561,7 +1757,7 @@ class ZenodoClient:
             progress=progress,
         )
 
-        return {entry.key: entry for entry in entries}
+        return {entry.filename: entry for entry in entries}
 
     def upload_files(
         self,
@@ -1764,7 +1960,386 @@ class ZenodoClient:
             Should a progress bar be shown?
         """
         self.delete_files(
-            record_id, tuple(self.list_files(record_id)), progress=progress
+            record_id,
+            tuple(self._list_files_at(record_id, draft=True)),
+            progress=progress,
+        )
+
+    def _stream_to_disk(
+        self,
+        entry: FileEntry,
+        target: Path,
+        *,
+        verify_checksum: bool,
+        progress: bool,
+        position: int | None,
+    ) -> None:
+        """
+        Stream a file's content to disk, one attempt
+
+        The content is written to a temporary file next to `target`
+        and only moved into place once it has arrived in full
+        and been checked, so a download which is interrupted or corrupted
+        never leaves anything behind under the name callers will look for.
+
+        Parameters
+        ----------
+        entry
+            File to download
+
+        target
+            Where to write the file
+
+        verify_checksum
+            Should we check that we received what Zenodo says it sent?
+
+        progress
+            Should a progress bar be shown?
+
+        position
+            Line to display the progress bar on
+
+        Raises
+        ------
+        ChecksumMismatchError
+            `verify_checksum` is `True` and what arrived is not what was sent
+        """
+        partial = target.with_name(f"{target.name}.part")
+        # MD5 because that is what Zenodo reports, not because we chose it
+        hasher = hashlib.md5()  # noqa: S324
+
+        try:
+            response = self._request(
+                entry.content_url,
+                stream=True,
+                timeout=self.timeout_upload,
+                description=f"download {entry.filename!r}",
+            )
+
+            with (
+                response,
+                get_file_progress_bar(
+                    desc=entry.filename,
+                    total=entry.size,
+                    progress=progress,
+                    position=position,
+                ) as progress_bar,
+                open(partial, "wb") as fh,
+            ):
+                for chunk in response.iter_content(chunk_size=1024 * 1024):
+                    fh.write(chunk)
+                    hasher.update(chunk)
+                    progress_bar.update(len(chunk))
+
+            if verify_checksum:
+                assert_md5_matches(
+                    entry.filename,
+                    local_md5=hasher.hexdigest(),
+                    remote_checksum=entry.checksum,
+                )
+
+        except BaseException:
+            # Whatever went wrong, do not leave half a file lying around
+            partial.unlink(missing_ok=True)
+
+            raise
+
+        # Only now do we know the file is complete and correct,
+        # so only now does it get the name callers will look for
+        partial.replace(target)
+
+    def _download_entry(  # noqa: PLR0913
+        self,
+        entry: FileEntry,
+        dest: Path,
+        *,
+        verify_checksum: bool = True,
+        overwrite: bool = False,
+        progress: bool = True,
+        position: int | None = None,
+        max_attempts: int = 5,
+    ) -> Path:
+        """
+        Download one file which we already have Zenodo's description of
+
+        Parameters
+        ----------
+        entry
+            File to download
+
+        dest
+            Where to write the file.
+
+            A directory means "write it in here, under its own name".
+
+        verify_checksum
+            Should we check that we received what Zenodo says it sent?
+
+        overwrite
+            Should an existing file with different contents be replaced?
+
+        progress
+            Should a progress bar be shown?
+
+        position
+            Line to display the progress bar on
+
+        max_attempts
+            Maximum number of times to try before giving up
+
+        Returns
+        -------
+        :
+            Path the file was written to
+
+        Raises
+        ------
+        FileExistsError
+            `dest` already holds a different file and `overwrite` is `False`
+
+        ChecksumMismatchError
+            `verify_checksum` is `True` and the download was corrupted
+            on every attempt
+        """
+        target = dest / entry.filename if dest.is_dir() else dest
+
+        if target.exists():
+            if get_file_md5(target) == entry.md5:
+                logger.info(f"{target} is already up to date, not downloading it again")
+
+                return target
+
+            if not overwrite:
+                msg = (
+                    f"{target} already exists and its contents are different "
+                    f"from {entry.filename!r} on Zenodo. "
+                    "Pass `overwrite=True` to replace it."
+                )
+
+                raise FileExistsError(msg)
+
+        logger.info(f"Downloading {entry.filename!r} to {target}")
+
+        retrying = _build_transfer_retrying(max_attempts)
+        retrying(
+            self._stream_to_disk,
+            entry,
+            target,
+            verify_checksum=verify_checksum,
+            progress=progress,
+            position=position,
+        )
+
+        return target
+
+    def download_file(  # noqa: PLR0913
+        self,
+        record_id: str | RecordID,
+        filename: str,
+        dest: Path,
+        *,
+        verify_checksum: bool = True,
+        overwrite: bool = False,
+        progress: bool = True,
+        max_attempts: int = 5,
+    ) -> Path:
+        """
+        Download one of a record's files
+
+        A record you have access to downloads.
+        A record you do not have access to returns a `403`.
+
+        Parameters
+        ----------
+        record_id
+            ID of the record to download from
+
+        filename
+            Name of the file to download, as it appears on Zenodo
+
+            Zenodo calls this the file's `key`,
+            but we use `filename` throughout
+            (see [`FileEntry`][openscm_zenodo.zenodo.FileEntry]).
+
+        dest
+            Where to write the file.
+
+            A directory means "write it in here, under its own name".
+
+        verify_checksum
+            Should we check that we received what Zenodo says it sent?
+
+            The checksum is calculated as the bytes arrive,
+            so this costs almost nothing.
+
+        overwrite
+            Should an existing file with different contents be replaced?
+
+            A file which is already there with the same contents
+            is left alone either way, and not downloaded again.
+
+        progress
+            Should a progress bar be shown?
+
+        max_attempts
+            Maximum number of times to try before giving up
+
+        Returns
+        -------
+        :
+            Path the file was written to
+
+        Raises
+        ------
+        FileNotOnRecordError
+            The record has no file called `filename`
+        """
+        files = self.list_files(record_id)
+        if filename not in files:
+            raise FileNotOnRecordError(
+                filename, record_id=str(record_id), available=files
+            )
+
+        return self._download_entry(
+            files[filename],
+            dest,
+            verify_checksum=verify_checksum,
+            overwrite=overwrite,
+            progress=progress,
+            max_attempts=max_attempts,
+        )
+
+    def download_files(  # noqa: PLR0913
+        self,
+        record_id: str | RecordID,
+        dest: Path | Mapping[str, Path],
+        *,
+        filenames: Collection[str] | None = None,
+        n_threads: int = 4,
+        verify_checksum: bool = True,
+        overwrite: bool = False,
+        progress: bool = True,
+        max_attempts: int = 5,
+    ) -> list[Path]:
+        """
+        Download a record's files
+
+        Files which are already where they are going, with the same contents,
+        are not downloaded again, so re-running after a failure part way through
+        only fetches what is still missing.
+
+        Parameters
+        ----------
+        record_id
+            ID of the record to download from
+
+        dest
+            Where to write the files.
+
+            A directory means "write them all in here, under their own names",
+            and it is created if it is not there already.
+            A mapping of filename to path says exactly where each file goes,
+            for callers who want that control;
+            it also says which files to download,
+            so `filenames` may not be given as well.
+
+        filenames
+            Names of the files to download, as they appear on Zenodo.
+
+            If not supplied, every file on the record is downloaded.
+            May not be given when `dest` is a mapping,
+            which already says which files are wanted.
+
+        n_threads
+            Number of files to download at once
+
+        verify_checksum
+            Should we check that we received what Zenodo says it sent?
+
+        overwrite
+            Should existing files with different contents be replaced?
+
+        progress
+            Should progress bars be shown?
+
+        max_attempts
+            Maximum number of times to try each download before giving up
+
+        Returns
+        -------
+        :
+            Paths the files were written to, in the order they were requested
+
+        Raises
+        ------
+        FileNotOnRecordError
+            The record has no file with one of the names asked for
+
+        ValueError
+            Both `dest` and `filenames` say which files are wanted,
+            and they cannot both decide
+        """
+        dest_per_file = None if isinstance(dest, Path) else dict(dest)
+
+        if dest_per_file is not None and filenames is not None:
+            msg = (
+                "`dest` is a mapping, which already says which files to download, "
+                "so `filenames` may not be given as well. "
+                f"Received {filenames=}."
+            )
+
+            raise ValueError(msg)
+
+        files = self.list_files(record_id)
+
+        wanted = tuple(dest_per_file) if dest_per_file is not None else filenames
+        if wanted is None:
+            to_download = list(files.values())
+
+        else:
+            missing = [name for name in wanted if name not in files]
+            if missing:
+                raise FileNotOnRecordError(
+                    missing, record_id=str(record_id), available=files
+                )
+
+            to_download = [files[name] for name in wanted]
+
+        if not to_download:
+            return []
+
+        logger.info(f"Downloading {len(to_download)} file(s) from {record_id!r}")
+
+        if dest_per_file is None:
+            cast(Path, dest).mkdir(parents=True, exist_ok=True)
+
+        positions = PositionAllocator(n_slots=n_threads)
+
+        def download_one(entry: FileEntry) -> Path:
+            if dest_per_file is not None:
+                entry_dest = dest_per_file[entry.filename]
+                entry_dest.parent.mkdir(parents=True, exist_ok=True)
+
+            else:
+                entry_dest = cast(Path, dest)
+
+            with positions.slot() as position:
+                return self._download_entry(
+                    entry,
+                    entry_dest,
+                    verify_checksum=verify_checksum,
+                    overwrite=overwrite,
+                    progress=progress,
+                    position=position,
+                    max_attempts=max_attempts,
+                )
+
+        return _run_in_parallel(
+            download_one,
+            to_download,
+            n_threads=n_threads,
+            desc="Downloading",
+            progress=progress,
         )
 
     def get_latest_version_id(self, record_id: str | RecordID) -> RecordID:
@@ -1868,7 +2443,7 @@ class ZenodoClient:
             Skipping rather than failing is what makes a release script
             safe to re-run after it has failed part way through.
         """
-        already_there = self.list_files(record_id)
+        already_there = self._list_files_at(record_id, draft=True)
         if already_there:
             logger.info(
                 f"Not importing files into record {record_id!r}, "
@@ -2908,6 +3483,76 @@ def retrieve_bibtex_entry(
         zenodo_interactor = ZenodoInteractor()
 
     return zenodo_interactor.get_bibtex_entry(deposition_id)
+
+
+def download_files(  # noqa: PLR0913
+    record_id: str | RecordID,
+    dest: Path | Mapping[str, Path],
+    client: ZenodoClient | None = None,
+    *,
+    filenames: Collection[str] | None = None,
+    n_threads: int = 4,
+    verify_checksum: bool = True,
+    overwrite: bool = False,
+    progress: bool = True,
+) -> list[Path]:
+    """
+    Download a record's files, in one call
+
+    Parameters
+    ----------
+    record_id
+        ID of the record to download from
+
+    dest
+        Where to write the files.
+
+        A directory means "write them all in here, under their own names".
+        A mapping of filename to path says exactly where each file goes,
+        and also says which files to download, see
+        [`download_files`][openscm_zenodo.zenodo.ZenodoClient.download_files].
+
+    client
+        Client to interact with Zenodo with.
+
+        If not supplied, we build a default
+        [`ZenodoClient`][openscm_zenodo.zenodo.ZenodoClient],
+        which picks up a token from the environment if there is one.
+
+    filenames
+        Names of the files to download.
+
+        If not supplied, every file on the record is downloaded.
+
+    n_threads
+        Number of files to download at once
+
+    verify_checksum
+        Should we check that we received what Zenodo says it sent?
+
+    overwrite
+        Should existing files with different contents be replaced?
+
+    progress
+        Should progress bars be shown?
+
+    Returns
+    -------
+    :
+        Paths the files were written to
+    """
+    if client is None:
+        client = ZenodoClient()
+
+    return client.download_files(
+        record_id,
+        dest,
+        filenames=filenames,
+        n_threads=n_threads,
+        verify_checksum=verify_checksum,
+        overwrite=overwrite,
+        progress=progress,
+    )
 
 
 def create_new_version(  # noqa: PLR0913

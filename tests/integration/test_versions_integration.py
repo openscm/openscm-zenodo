@@ -75,7 +75,7 @@ def test_new_version_from_a_non_latest_version(sandbox_client, new_version_draft
 
 def test_import_files(sandbox_client, new_version_draft):
     previous = sandbox_client.list_files(
-        sandbox_client.get_latest_version_id(VERSIONED_RECORD_ID), draft=False
+        sandbox_client.get_latest_version_id(VERSIONED_RECORD_ID)
     )
     assert previous
 
@@ -152,7 +152,7 @@ def test_create_new_version_inherit(sandbox_client, tmp_path):
     path.write_text("an extra file\n")
 
     previous = sandbox_client.list_files(
-        sandbox_client.get_latest_version_id(VERSIONED_RECORD_ID), draft=False
+        sandbox_client.get_latest_version_id(VERSIONED_RECORD_ID)
     )
 
     new_version_id = create_new_version(

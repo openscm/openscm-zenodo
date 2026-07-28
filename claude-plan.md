@@ -809,7 +809,85 @@ after a failed upload resumes the same draft rather than creating a second one.
 
 ---
 
-## Part 5 — File retrieval (download)
+## Part 5 — File retrieval (download) — ✅ IMPLEMENTED
+
+**Done.** `download_file`, `download_files` and `retrieve_files`, with unit tests
+and live tests against both production (read-only, no token) and the sandbox
+(`tests/integration/test_download_integration.py`). Deltas from the text below,
+all deliberate:
+
+- **No `draft` argument, anywhere.** A record is either published or still a
+  draft and its ID already says which, so there is a named method for asking:
+  `is_draft(record_id)`. 5.2's `draft` switch is gone, and so is
+  `download_files(draft=...)`.
+- **A record ID which we cannot find is an error, not something to work around.**
+  Asking for an ID means believing the record is there, so `is_draft` looks for
+  the published record, then (if we have a token) for a draft, and raises
+  `RecordNotFoundError` if neither is there. The message depends on whether we
+  had a token, and *which* one: with one, "we could not find it, even using the
+  token from `$ZENODO_TOKEN`" plus a reminder that sandbox and production tokens
+  are not interchangeable; without one, "drafts and restricted records are not
+  visible without a token, supply one if this is either of those". Naming the
+  token's origin next to the domain is the point — a production environment
+  variable against `sandbox.zenodo.org` is the usual reason a record which is
+  definitely there cannot be found, and seeing the two side by side gives that
+  away immediately. `resolve_token_with_source` returns where the token came
+  from alongside it, and the client keeps it on `token_source`, which is a
+  description and never the token itself, so it is safe in messages and in the
+  `repr`. That removes the guessing entirely — by the
+  time we answer, we know we can see the record — and it means a typo'd ID says
+  so instead of surfacing a bare `404` from wherever we happened to look last.
+  Two earlier attempts got this wrong by *inferring* draft-ness from something
+  being absent, which cannot distinguish a draft from a restricted record from
+  a typo.
+- **Verified: a published record *can* have a draft, and it makes no difference
+  here.** `POST /api/records/{id}/draft` on a published record gives an object
+  with the same ID and both `is_draft` and `is_published` true. Its **metadata
+  can be edited in place** and published again, keeping the same ID and DOI; its
+  **files cannot** — Zenodo answers `403 "Bucket is locked for modifications."`,
+  which is precisely why `new_version` exists. So for anything to do with files,
+  an edit draft of a published record simply *is* the published record, and
+  `is_draft` never even looks for one: finding the published record has already
+  answered the question. Deleting an edit draft leaves the published record
+  untouched, and a `GET` on `/draft` does not create one — a freshly published
+  record `404`s until a draft is explicitly asked for. This is the behaviour
+  §1.2.1's `get_or_create_draft` will wrap.
+- **The write paths do not go through `list_files`.** `_diff_files`,
+  `import_files` and `delete_all_files` always mean the draft, so they use a
+  private `_list_draft_files` and there is no resolution step, and no ambiguity,
+  on the upload path.
+- **Downloads follow the `content` link from the listing** rather than building a
+  URL. Zenodo gives one per file for both published records and drafts, which is
+  what removes the last place the two endpoints would have had to be told apart.
+  The listing also supplies `size` for the progress bar and `checksum` for
+  verification, so the one extra request pays for itself.
+- **The checksum is verified before the file is renamed into place**, not after.
+  The first version verified after the atomic rename, which meant a corrupted
+  download still landed under its real name — caught by a test. Now a failure of
+  any kind removes the `.part` file and leaves nothing behind at all.
+- **Verification is nearly free here**, unlike upload: the bytes are hashed as
+  they arrive, so there is no extra read. `verify_checksum` is still there but
+  there is little reason to turn it off.
+- **`FileNotOnRecordError`** is new: asking for a name which is not on the record
+  lists the names which are, since a typo is the usual cause. `download_files`
+  checks every requested name up front, so it fails before downloading anything
+  rather than part way through.
+- **`should_retry_upload` is now `should_retry_transfer`**, and the retry policy
+  is built by a shared `_build_transfer_retrying`, since uploads and downloads
+  want exactly the same thing.
+- **`download_files` takes `dest: Path | Mapping[str, Path]`** — a directory, or
+  exactly where each file goes. The mapping also says *which* files are wanted,
+  so passing `filenames` as well is an error. Looping over `download_file` would
+  give the same control but lose the parallelism, which is why this is worth a
+  union rather than a documentation note.
+- **`FileEntry.key` is `FileEntry.filename`**, so the whole API says `filename`;
+  `key` is Zenodo's word for it and is still in `raw`. `content_url` is a real
+  field parsed in `from_json`, so a response shaped differently to what we expect
+  fails where we read it rather than much later.
+- **The module-level helper is `download_files`, not `retrieve_files`** —
+  matching the method it wraps beats matching `retrieve_metadata`.
+
+
 
 Downloading files is the read-side counterpart to Part 2's upload. InvenioRDM
 serves file content on both **published records** and **drafts**, and the same
