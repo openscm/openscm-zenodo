@@ -22,10 +22,6 @@ ZENODO_API_FLAG = doctest.register_optionflag("ZENODO_API")
 """
 Doctest directive which marks an example as one which hits the Zenodo API
 
-Write it like any other doctest directive, i.e.
-
-    >>> ZenodoClient().get_published("4589756")  # doctest: +ZENODO_API
-
 Marking one example is enough:
 the doctest it belongs to is skipped as a whole
 unless the tests are run with `--zenodo-api-doctests`,
