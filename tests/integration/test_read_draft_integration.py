@@ -19,10 +19,11 @@ def test_get_draft(sandbox_client, draft_record_id):
     """
     draft = sandbox_client.get_draft(draft_record_id)
 
-    assert str(draft["id"]) == draft_record_id
-    assert draft["is_draft"]
-    assert not draft["is_published"]
-    assert draft["metadata"]["title"]
+    assert draft.record_id == draft_record_id
+    assert draft.is_draft
+    # A record which has never been published is a draft, not a draft *of* one
+    assert not draft.is_edited_metadata_draft
+    assert draft.metadata.title
 
 
 @pytest.mark.zenodo_token
@@ -32,7 +33,7 @@ def test_get_metadata_of_a_draft(sandbox_client, draft_record_id):
     """
     metadata = sandbox_client.get_metadata(draft_record_id)
 
-    assert metadata == sandbox_client.get_draft(draft_record_id)["metadata"]
+    assert metadata == sandbox_client.get_draft(draft_record_id).metadata
 
 
 @pytest.mark.zenodo_token
@@ -69,8 +70,7 @@ def test_get_record_of_a_draft(sandbox_client, draft_record_id):
     record = sandbox_client.get_record(draft_record_id)
 
     assert record == sandbox_client.get_draft(draft_record_id)
-    assert record["is_draft"]
-    assert not record["is_published"]
+    assert record.is_draft
 
 
 @pytest.mark.zenodo_token

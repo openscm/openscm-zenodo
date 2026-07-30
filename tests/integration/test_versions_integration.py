@@ -12,7 +12,8 @@ import pytest
 
 from openscm_zenodo.checksums import get_file_md5
 from openscm_zenodo.exceptions import ZenodoHTTPError
-from openscm_zenodo.zenodo import FilesMode, create_new_version
+from openscm_zenodo.metadata import Metadata
+from openscm_zenodo.zenodo import FilesMode, create_or_get_new_version
 
 pytestmark = pytest.mark.zenodo_token
 
@@ -29,7 +30,7 @@ which is what lets us check that any version can be used as a starting point.
 @pytest.fixture
 def new_version_draft(sandbox_client):
     """A new version of the versioned record, deleted once the test is done"""
-    record_id = sandbox_client.new_version(VERSIONED_RECORD_ID)
+    record_id = sandbox_client.create_or_get_new_version(VERSIONED_RECORD_ID)
 
     yield record_id
 
@@ -53,7 +54,7 @@ def test_new_version_is_get_or_create(sandbox_client, new_version_draft):
     so it is worth pinning against Zenodo's actual build
     rather than trusting upstream InvenioRDM's behaviour.
     """
-    again = sandbox_client.new_version(VERSIONED_RECORD_ID)
+    again = sandbox_client.create_or_get_new_version(VERSIONED_RECORD_ID)
 
     assert again == new_version_draft
 
@@ -68,7 +69,7 @@ def test_new_version_from_a_non_latest_version(sandbox_client, new_version_draft
     latest = sandbox_client.get_latest_version_id(VERSIONED_RECORD_ID)
     assert latest != VERSIONED_RECORD_ID
 
-    from_latest = sandbox_client.new_version(latest)
+    from_latest = sandbox_client.create_or_get_new_version(latest)
 
     assert from_latest == new_version_draft
 
@@ -116,7 +117,7 @@ def test_import_files_into_a_draft_with_files_would_fail(
 def test_update_metadata(sandbox_client, new_version_draft):
     title = "openscm-zenodo integration test, please ignore"
 
-    sandbox_client.update_metadata(new_version_draft, {"title": title})
+    sandbox_client.update_metadata(new_version_draft, Metadata(title=title))
 
     draft = sandbox_client._request(
         f"/api/records/{new_version_draft}/draft", requires_auth=True
@@ -128,7 +129,7 @@ def test_create_new_version_start_fresh(sandbox_client, tmp_path):
     path = tmp_path / "fresh.txt"
     path.write_text("fresh contents\n")
 
-    new_version_id = create_new_version(
+    new_version_id = create_or_get_new_version(
         VERSIONED_RECORD_ID, sandbox_client, files=[path], progress=False
     )
 
@@ -155,7 +156,7 @@ def test_create_new_version_inherit(sandbox_client, tmp_path):
         sandbox_client.get_latest_version_id(VERSIONED_RECORD_ID)
     )
 
-    new_version_id = create_new_version(
+    new_version_id = create_or_get_new_version(
         VERSIONED_RECORD_ID,
         sandbox_client,
         files=[path],
@@ -183,7 +184,7 @@ def test_create_new_version_mirror(sandbox_client, tmp_path):
     path = tmp_path / "only-this.txt"
     path.write_text("only this one\n")
 
-    new_version_id = create_new_version(
+    new_version_id = create_or_get_new_version(
         VERSIONED_RECORD_ID,
         sandbox_client,
         files=[path],
@@ -209,7 +210,7 @@ def test_create_new_version_is_re_runnable(sandbox_client, tmp_path):
     path = tmp_path / "resumed.txt"
     path.write_text("resumed\n")
 
-    first = create_new_version(
+    first = create_or_get_new_version(
         VERSIONED_RECORD_ID,
         sandbox_client,
         files=[path],
@@ -218,7 +219,7 @@ def test_create_new_version_is_re_runnable(sandbox_client, tmp_path):
     )
 
     try:
-        second = create_new_version(
+        second = create_or_get_new_version(
             VERSIONED_RECORD_ID,
             sandbox_client,
             files=[path],

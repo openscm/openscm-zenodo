@@ -15,6 +15,7 @@ import requests
 
 from openscm_zenodo.exceptions import (
     ChecksumMismatchError,
+    FileTransferFailedError,
     MissingTokenError,
     ZenodoHTTPError,
 )
@@ -406,6 +407,11 @@ def test_delete_file(no_token_in_env, make_recording_session, make_response):
             id="checksum-mismatch",
         ),
         pytest.param(
+            FileTransferFailedError("a", record_id="1", errors="it failed"),
+            True,
+            id="transfer-failed",
+        ),
+        pytest.param(
             requests.exceptions.ConnectionError("boom"), True, id="connection-error"
         ),
         pytest.param(requests.exceptions.ReadTimeout("boom"), True, id="read-timeout"),
@@ -434,3 +440,68 @@ def test_should_retry_transfer_http_errors(make_response, status_code, exp):
     exc = ZenodoHTTPError(make_response(status_code=status_code))
 
     assert should_retry_transfer(exc) is exp
+
+
+def test_upload_file_content_which_zenodo_accepts_and_then_drops(
+    no_token_in_env, make_recording_session, make_response, to_upload
+):
+    """
+    A `200` which says the transfer failed is a failure, and says so where it happens
+
+    Zenodo reports a storage failure on the content upload as a `200` whose body
+    carries an `errors` key, a `size` of zero and no checksum. Nothing about the
+    response itself says anything is wrong, and the file then disappears from
+    the draft, so without this check the upload dies two steps later on
+    `Record 'X' has no file 'Y'` — which points at the wrong thing entirely.
+    """
+    path, _ = to_upload
+    failed_content = {
+        "key": "data.nc",
+        "status": "completed",
+        "size": 0,
+        "checksum": None,
+        "errors": "File upload transfer failed.",
+    }
+
+    session = make_recording_session(
+        [
+            # Initialise, then the content Zenodo accepts and reports as failed
+            make_response(),
+            make_response(json_body=failed_content),
+            # The clean-up delete, once we give up
+            make_response(),
+        ]
+    )
+    client = ZenodoClient(token="a-token", session=session)  # noqa: S106
+
+    with pytest.raises(FileTransferFailedError, match="File upload transfer failed"):
+        client.upload_file(RECORD_ID, path, max_attempts=1, progress=False)
+
+    # It never got as far as committing
+    assert not any(call["url"].endswith("/commit") for call in session.calls)
+
+
+def test_upload_file_content_failure_is_retried(
+    no_token_in_env, make_recording_session, make_response, to_upload
+):
+    """
+    Zenodo's storage failures are transient, so a second attempt is worth making
+    """
+    path, md5 = to_upload
+
+    session = make_recording_session(
+        [
+            # First attempt, which Zenodo accepts and then drops
+            make_response(),
+            make_response(json_body={"key": "data.nc", "errors": "it failed"}),
+            # Second attempt, which works
+            make_response(),
+            make_response(),
+            make_commit_response(make_response, md5),
+        ]
+    )
+    client = ZenodoClient(token="a-token", session=session)  # noqa: S106
+
+    entry = client.upload_file(RECORD_ID, path, max_attempts=2, progress=False)
+
+    assert entry.checksum == f"md5:{md5}"

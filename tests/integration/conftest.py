@@ -7,9 +7,48 @@ from __future__ import annotations
 import pytest
 
 from openscm_zenodo.exceptions import ZenodoHTTPError
+from openscm_zenodo.metadata import Creator, Metadata, Subject
 from openscm_zenodo.zenodo import ZenodoClient, ZenodoDomain
 
 HTTP_NOT_FOUND = 404
+
+
+@pytest.fixture
+def build_metadata():
+    """
+    Get a factory for metadata which is complete enough for Zenodo to publish
+    """
+
+    def factory(title="openscm-zenodo integration test, please ignore"):
+        return Metadata(
+            title=title,
+            resource_type="dataset",
+            creators=(
+                Creator.person(
+                    "Nicholls",
+                    "Zebedee",
+                    orcid="0000-0002-4767-2723",
+                    affiliations=["Climate Resource"],
+                ),
+                Creator.organisation("openscm-zenodo test suite"),
+            ),
+            publication_date="2026-07-28",
+            publisher="Zenodo",
+            description="Metadata written by the test suite",
+            version="v1.2.3",
+            subjects=(Subject(subject="climate"),),
+            raw={
+                "additional_titles": [
+                    {
+                        "title": "Another title",
+                        "type": {"id": "alternative-title"},
+                    }
+                ]
+            },
+        )
+
+    return factory
+
 
 DRAFT_METADATA = {
     "access": {"record": "public", "files": "public"},

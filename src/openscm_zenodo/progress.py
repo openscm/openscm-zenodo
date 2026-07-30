@@ -92,7 +92,7 @@ def get_file_progress_bar(
         Number of characters of `desc` to show
 
     **kwargs
-        Passed to [`tqdm.tqdm`][tqdm.tqdm],
+        Passed to [`tqdm`](https://tqdm.github.io/docs/tqdm/),
         overriding
         [`TQDM_FILE_PROGRESS_KWARGS_DEFAULT`][openscm_zenodo.progress.TQDM_FILE_PROGRESS_KWARGS_DEFAULT].
 
@@ -177,7 +177,7 @@ def get_files_progress_bar(
         puts this bar above the per-file bars.
 
     **kwargs
-        Passed to [`tqdm.tqdm`][tqdm.tqdm]
+        Passed to [`tqdm`](https://tqdm.github.io/docs/tqdm/)
 
     Returns
     -------

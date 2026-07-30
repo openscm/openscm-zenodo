@@ -4,17 +4,25 @@ Tests of the read paths: records, drafts, metadata and citations
 
 from __future__ import annotations
 
+import inspect
+
 import pytest
 
 from openscm_zenodo.exceptions import (
+    DraftMetadataEditsNotFoundError,
+    DraftRecordDraftMetadataEditsError,
+    PublishedRecordDraftError,
     RecordNotFoundError,
     UnknownCitationStyleError,
     ZenodoHTTPError,
+    ZenodoWarning,
 )
+from openscm_zenodo.metadata import Metadata
 from openscm_zenodo.zenodo import (
     CITATION_FORMAT_ACCEPT,
     INVENIORDM_JSON_ACCEPT,
     CitationFormat,
+    Record,
     ZenodoClient,
     retrieve_citation,
     retrieve_metadata,
@@ -41,6 +49,15 @@ DRAFT_BODY = {
     "parent": {"id": "1230"},
 }
 
+EDITED_METADATA_DRAFT_BODY = {
+    "id": int(RECORD_ID),
+    # Both, which is the shape only an edited metadata draft has
+    "is_draft": True,
+    "is_published": True,
+    "metadata": {"title": "A correction", "version": "v1.0.0"},
+    "parent": {"id": "1230"},
+}
+
 
 @pytest.fixture
 def published(make_recording_session, make_response):
@@ -54,7 +71,7 @@ def test_get_published(published, no_token_in_env):
     """
     client = ZenodoClient(session=published)
 
-    assert client.get_published(RECORD_ID) == RECORD_BODY
+    assert client.get_published(RECORD_ID) == Record.from_json(RECORD_BODY)
 
     (call,) = published.calls
     assert call["method"] == "GET"
@@ -69,7 +86,7 @@ def test_get_draft(make_recording_session, make_response):
     session = make_recording_session([make_response(json_body=DRAFT_BODY)])
     client = ZenodoClient(token="fake-token", session=session)  # noqa: S106
 
-    assert client.get_draft(RECORD_ID) == DRAFT_BODY
+    assert client.get_draft(RECORD_ID) == Record.from_json(DRAFT_BODY)
 
     (call,) = session.calls
     assert call["url"] == DRAFT_URL
@@ -77,18 +94,227 @@ def test_get_draft(make_recording_session, make_response):
     assert call["headers"]["Authorization"] == "Bearer fake-token"
 
 
-def test_get_draft_which_is_not_there(make_recording_session, make_response):
+def test_get_draft_of_a_published_record(make_recording_session, make_response):
     """
-    A record with no draft surfaces as the 404 Zenodo sent
+    A published record is not a draft, and never comes back from `get_draft`
 
-    Whether a record even has a draft is the question being asked here,
-    so this is information rather than a failure of ours to find something.
+    Zenodo answers with a bare `404`, which does not distinguish this from
+    a record which is not there at all.
     """
-    session = make_recording_session([make_response(status_code=404, url=DRAFT_URL)])
+    session = make_recording_session(
+        [
+            make_response(status_code=404, url=DRAFT_URL),
+            # Our look at why, which finds the published record
+            make_response(json_body=RECORD_BODY),
+        ]
+    )
     client = ZenodoClient(token="fake-token", session=session)  # noqa: S106
 
-    with pytest.raises(ZenodoHTTPError):
+    with pytest.raises(PublishedRecordDraftError, match="is published"):
         client.get_draft(RECORD_ID)
+
+
+def test_get_draft_never_returns_metadata_edits(make_recording_session, make_response):
+    """
+    A published record which *is* mid-edit is refused too
+
+    Zenodo serves the edits from the same endpoint as a draft record, so a
+    `200` here is not enough: the document has to be looked at. This is the case
+    which would otherwise hand back a published record's pending metadata under
+    the name of a draft.
+    """
+    session = make_recording_session(
+        [make_response(json_body=EDITED_METADATA_DRAFT_BODY)]
+    )
+    client = ZenodoClient(token="fake-token", session=session)  # noqa: S106
+
+    with pytest.raises(PublishedRecordDraftError, match="get_edited_metadata_draft"):
+        client.get_draft(RECORD_ID)
+
+
+def test_get_edited_metadata_draft(make_recording_session, make_response):
+    """
+    Reading a published record's pending edits does not start any
+    """
+    session = make_recording_session(
+        [
+            # `is_draft`, which finds the published record
+            make_response(json_body=RECORD_BODY),
+            make_response(json_body=EDITED_METADATA_DRAFT_BODY),
+        ]
+    )
+    client = ZenodoClient(token="fake-token", session=session)  # noqa: S106
+
+    edits = client.get_edited_metadata_draft(RECORD_ID)
+
+    assert edits == Record.from_json(EDITED_METADATA_DRAFT_BODY)
+    # A read, not a create
+    assert session.calls[-1]["method"] == "GET"
+
+
+def test_get_edited_metadata_draft_when_there_are_none(
+    make_recording_session, make_response
+):
+    session = make_recording_session(
+        [
+            make_response(json_body=RECORD_BODY),
+            make_response(status_code=404, url=DRAFT_URL),
+            # Our look at why, which finds the published record
+            make_response(json_body=RECORD_BODY),
+        ]
+    )
+    client = ZenodoClient(token="fake-token", session=session)  # noqa: S106
+
+    with pytest.raises(
+        DraftMetadataEditsNotFoundError, match="create_or_get_edited_metadata_draft"
+    ):
+        client.get_edited_metadata_draft(RECORD_ID)
+
+
+def test_get_edited_metadata_draft_of_a_draft(make_recording_session, make_response):
+    """
+    A record which was never published has no separate metadata to read
+    """
+    session = make_recording_session(
+        [
+            make_response(status_code=404, url=RECORD_URL),
+            make_response(json_body=DRAFT_BODY),
+        ]
+    )
+    client = ZenodoClient(token="fake-token", session=session)  # noqa: S106
+
+    with pytest.raises(DraftRecordDraftMetadataEditsError, match="already a draft"):
+        client.get_edited_metadata_draft(RECORD_ID)
+
+
+def test_get_draft_of_a_record_which_is_not_there(
+    make_recording_session, make_response
+):
+    """
+    The same `404` from a record which does not exist says *that* instead
+    """
+    session = make_recording_session(
+        [
+            make_response(status_code=404, url=DRAFT_URL),
+            make_response(status_code=404, url=RECORD_URL),
+        ]
+    )
+    client = ZenodoClient(token="fake-token", session=session)  # noqa: S106
+
+    with pytest.raises(RecordNotFoundError):
+        client.get_draft(RECORD_ID)
+
+
+def test_create_or_get_edited_metadata_draft(make_recording_session, make_response):
+    """
+    Starting metadata edits is a `POST`, which Zenodo answers with any existing one
+
+    It is create-or-get on Zenodo's side,
+    so calling it again is not a way to end up with two drafts.
+    """
+    session = make_recording_session(
+        [
+            # `is_draft`, which finds the published record
+            make_response(json_body=RECORD_BODY),
+            make_response(json_body=EDITED_METADATA_DRAFT_BODY),
+        ]
+    )
+    client = ZenodoClient(token="fake-token", session=session)  # noqa: S106
+
+    draft = client.create_or_get_edited_metadata_draft(RECORD_ID)
+
+    assert draft == Record.from_json(EDITED_METADATA_DRAFT_BODY)
+    assert draft.is_edited_metadata_draft
+    # An edited metadata draft is not a draft record, it belongs to a published one
+    assert not draft.is_draft
+
+    call = session.calls[-1]
+    assert call["method"] == "POST"
+    assert call["url"] == DRAFT_URL
+    assert call["headers"]["Accept"] == INVENIORDM_JSON_ACCEPT
+
+
+def test_create_or_get_edited_metadata_draft_of_a_draft(
+    make_recording_session, make_response
+):
+    """
+    A record which was never published is already a draft, so this does not apply
+    """
+    session = make_recording_session(
+        [
+            make_response(status_code=404, url=RECORD_URL),
+            make_response(json_body=DRAFT_BODY),
+        ]
+    )
+    client = ZenodoClient(token="fake-token", session=session)  # noqa: S106
+
+    with pytest.raises(
+        DraftRecordDraftMetadataEditsError,
+        match="already a draft",
+    ):
+        client.create_or_get_edited_metadata_draft(RECORD_ID)
+
+
+def test_has_edited_metadata_draft(make_recording_session, make_response):
+    session = make_recording_session(
+        [
+            make_response(json_body=RECORD_BODY),
+            make_response(json_body=EDITED_METADATA_DRAFT_BODY),
+        ]
+    )
+    client = ZenodoClient(token="fake-token", session=session)  # noqa: S106
+
+    assert client.has_edited_metadata_draft(RECORD_ID) is True
+
+    call = session.calls[-1]
+    assert call["method"] == "GET"
+    assert call["url"] == DRAFT_URL
+
+
+def test_has_edited_metadata_draft_when_there_are_none(
+    make_recording_session, make_response
+):
+    """
+    A published record nobody has started editing has no pending changes
+    """
+    session = make_recording_session(
+        [
+            make_response(json_body=RECORD_BODY),
+            make_response(status_code=404, url=DRAFT_URL),
+        ]
+    )
+    client = ZenodoClient(token="fake-token", session=session)  # noqa: S106
+
+    assert client.has_edited_metadata_draft(RECORD_ID) is False
+
+
+def test_has_edited_metadata_draft_of_a_draft(make_recording_session, make_response):
+    """
+    The question does not apply to a record which was never published
+    """
+    session = make_recording_session(
+        [
+            make_response(status_code=404, url=RECORD_URL),
+            make_response(json_body=DRAFT_BODY),
+        ]
+    )
+    client = ZenodoClient(token="fake-token", session=session)  # noqa: S106
+
+    with pytest.raises(DraftRecordDraftMetadataEditsError):
+        client.has_edited_metadata_draft(RECORD_ID)
+
+
+def test_a_published_record_never_reports_pending_edits(published, no_token_in_env):
+    """
+    Zenodo does not say, on the published endpoint, that edits are under way
+
+    This is why `has_edited_metadata_draft` is a request of its own rather than
+    something read off a record we already have. If Zenodo ever starts saying,
+    this test is what notices.
+    """
+    client = ZenodoClient(session=published)
+
+    assert client.get_published(RECORD_ID).is_edited_metadata_draft is False
 
 
 def test_get_metadata_published(published, no_token_in_env):
@@ -97,7 +323,7 @@ def test_get_metadata_published(published, no_token_in_env):
     """
     client = ZenodoClient(session=published)
 
-    assert client.get_metadata(RECORD_ID) == RECORD_BODY["metadata"]
+    assert client.get_metadata(RECORD_ID) == Metadata.from_json(RECORD_BODY["metadata"])
 
     # The published record answers on the first request, so there is only one
     assert len(published.calls) == 1
@@ -115,7 +341,7 @@ def test_get_metadata_draft(make_recording_session, make_response):
     )
     client = ZenodoClient(token="fake-token", session=session)  # noqa: S106
 
-    assert client.get_metadata(RECORD_ID) == DRAFT_BODY["metadata"]
+    assert client.get_metadata(RECORD_ID) == Metadata.from_json(DRAFT_BODY["metadata"])
 
     assert [call["url"] for call in session.calls] == [RECORD_URL, DRAFT_URL]
 
@@ -126,7 +352,7 @@ def test_get_record_published(published, no_token_in_env):
     """
     client = ZenodoClient(session=published)
 
-    assert client.get_record(RECORD_ID) == RECORD_BODY
+    assert client.get_record(RECORD_ID) == Record.from_json(RECORD_BODY)
 
     assert [call["url"] for call in published.calls] == [RECORD_URL]
 
@@ -146,7 +372,7 @@ def test_get_record_draft(make_recording_session, make_response):
     )
     client = ZenodoClient(token="fake-token", session=session)  # noqa: S106
 
-    assert client.get_record(RECORD_ID) == DRAFT_BODY
+    assert client.get_record(RECORD_ID) == Record.from_json(DRAFT_BODY)
 
     assert [call["url"] for call in session.calls] == [RECORD_URL, DRAFT_URL]
 
@@ -158,9 +384,9 @@ def test_get_record_prefers_the_published_record(make_recording_session, make_re
     A published record can have a draft of its own,
     holding metadata changes which have not been published yet.
     We look for the published record first, so that is what comes back,
-    and the draft endpoint is never asked.
-    Whether that is the right answer is Part 13.3's question,
-    so this test is here to make a change of mind visible.
+    and the draft endpoint is never asked:
+    the published record is what the record says to everyone else,
+    and `get_draft` is how to read the pending changes.
     """
     session = make_recording_session(
         [
@@ -170,7 +396,7 @@ def test_get_record_prefers_the_published_record(make_recording_session, make_re
     )
     client = ZenodoClient(token="fake-token", session=session)  # noqa: S106
 
-    assert client.get_record(RECORD_ID) == RECORD_BODY
+    assert client.get_record(RECORD_ID) == Record.from_json(RECORD_BODY)
 
     assert [call["url"] for call in session.calls] == [RECORD_URL]
 
@@ -223,7 +449,7 @@ def test_retrieve_metadata_helper(monkeypatch, published, no_token_in_env):
         "openscm_zenodo.zenodo.ZenodoClient", lambda: ZenodoClient(session=published)
     )
 
-    assert retrieve_metadata(RECORD_ID) == RECORD_BODY["metadata"]
+    assert retrieve_metadata(RECORD_ID) == Metadata.from_json(RECORD_BODY["metadata"])
 
 
 @pytest.mark.parametrize("fmt", list(CitationFormat))
@@ -277,7 +503,7 @@ def test_get_citation_style_and_locale_are_sent_for_citations(
 
 
 def test_get_citation_style_ignored_with_a_warning(
-    make_recording_session, make_response, log_messages, no_token_in_env
+    make_recording_session, make_response, no_token_in_env
 ):
     """
     Asking for a style with a format which has no styles says so
@@ -285,11 +511,11 @@ def test_get_citation_style_ignored_with_a_warning(
     session = make_recording_session([make_response(text="@dataset{...}")])
     client = ZenodoClient(session=session)
 
-    client.get_citation(RECORD_ID, fmt=CitationFormat.bibtex, style="ieee")
+    with pytest.warns(ZenodoWarning, match="Ignoring style"):
+        client.get_citation(RECORD_ID, fmt=CitationFormat.bibtex, style="ieee")
 
     (call,) = session.calls
     assert call["params"] is None
-    assert any("Ignoring style" in message for message in log_messages)
 
 
 def test_get_citation_style_zenodo_rejects(make_recording_session, no_token_in_env):
@@ -306,7 +532,7 @@ def test_get_citation_style_zenodo_rejects(make_recording_session, no_token_in_e
 
 
 def test_get_citation_style_we_have_not_checked(
-    make_recording_session, make_response, log_messages, no_token_in_env
+    make_recording_session, make_response, no_token_in_env
 ):
     """
     A style we do not know about is sent anyway, with a warning
@@ -317,13 +543,13 @@ def test_get_citation_style_we_have_not_checked(
     session = make_recording_session([make_response(text="A citation")])
     client = ZenodoClient(session=session)
 
-    client.get_citation(
-        RECORD_ID, fmt=CitationFormat.citation, style="some-journal-style"
-    )
+    with pytest.warns(ZenodoWarning, match="not checked the citation style"):
+        client.get_citation(
+            RECORD_ID, fmt=CitationFormat.citation, style="some-journal-style"
+        )
 
     (call,) = session.calls
     assert call["params"]["style"] == "some-journal-style"
-    assert any("we have not checked" in message.lower() for message in log_messages)
 
 
 def test_get_citation_style_warning_can_be_turned_off(
@@ -383,3 +609,40 @@ def test_retrieve_citation_helper(monkeypatch, make_recording_session, make_resp
     )
 
     assert retrieve_citation(RECORD_ID) == "@dataset{...}"
+
+
+def test_a_record_can_be_passed_wherever_an_id_can(
+    make_recording_session, make_response
+):
+    """
+    A record which has just been handed back can be passed straight on
+    """
+    session = make_recording_session([make_response(json_body=RECORD_BODY)] * 2)
+    client = ZenodoClient(token="fake-token", session=session)  # noqa: S106
+
+    record = client.get_published(RECORD_ID)
+
+    assert client.get_published(record) == record
+    assert session.calls[-1]["url"] == RECORD_URL
+
+
+def test_every_public_method_which_takes_a_record_takes_a_record_object():
+    """
+    The coercion is applied uniformly, so a new method cannot forget it
+
+    Everything goes into a URL path, where a `Record` would stringify to its
+    repr rather than its ID, so a missed coercion is a silent wrong request.
+    """
+    missed = []
+    for name, method in inspect.getmembers(ZenodoClient, inspect.isfunction):
+        if name.startswith("_"):
+            continue
+
+        parameters = inspect.signature(method).parameters
+        if "record_id" not in parameters:
+            continue
+
+        if parameters["record_id"].annotation != "RecordIDLike":
+            missed.append(name)
+
+    assert missed == []

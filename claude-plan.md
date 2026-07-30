@@ -321,13 +321,13 @@ functions — `record_url(record_id, zenodo_domain)` — rather than a class.
 | — | `get_record(record_id)` | published or draft, whichever it is (1.2.2) |
 | `get_deposition` | `get_draft(record_id)` | `GET /api/records/{id}/draft` — read only, `404` if none |
 | — | `create_record(metadata)` → `RecordID` | `POST /api/records` (brand-new record + its draft) |
-| — | `get_or_create_draft(record_id)` → `RecordID` | `POST /api/records/{id}/draft` — the draft of a published record (see 1.2.1) |
+| — | `create_or_get_edited_metadata_draft(record_id)` → `Record` | `POST /api/records/{id}/draft` — a published record's pending metadata edits (see 1.2.1, renamed in Part 6) |
 | `create_new_version_from_latest` / `get_draft_deposition_id` | `new_version(record_id, *, import_files=False)` → `RecordID` | `POST /api/records/{id}/versions` (empty by default) — also get-or-create (1.2.1) |
 | — | `import_files(record_id)` | `POST .../draft/actions/files-import` |
 | `get_latest_deposition_id` | `get_latest_version_id(record_id)` → `RecordID` | via `versions` / `links.latest` |
 | `get_concept_id` | `get_parent_id(record_id)` → `ParentID` | InvenioRDM "parent" id (all-versions id) |
 | `update_metadata` | `update_metadata(record_id, metadata)` | `PUT /api/records/{id}/draft` |
-| `get_metadata` | `get_metadata(record_id, *, user_controlled_only=False)` | new schema (Part 6) |
+| `get_metadata` | `get_metadata(record_id)` → `Metadata` | new schema (Part 6); no `user_controlled_only`, see the note at the top of Part 6 |
 | `publish` | `publish(record_id)` | `POST .../draft/actions/publish` |
 | `upload_file_to_bucket_url` | `upload_file(record_id, path, *, verify_checksum=True)` | init→content→commit (Part 2) |
 | `upload_files` | `upload_files(record_id, paths, *, n_threads=4, verify_checksum=True)` | **additive**; skips files already on the draft with a matching MD5; warns on stripped paths (Part 11) |
@@ -385,7 +385,10 @@ What that means for the API:
   callers otherwise assume it always creates.
 
 Caveat: this is upstream InvenioRDM behaviour, and Zenodo runs its own pinned
-build. Part 12 gets an explicit **idempotency test** (call `get_or_create_draft`
+build. *(Part 6 renamed `get_or_create_draft` to
+`create_or_get_edited_metadata_draft`, and restricted it to published records:
+an unpublished record is already a draft, so there is nothing separate to edit.)*
+Part 12 gets an explicit **idempotency test** (call `get_or_create_draft`
 twice and `new_version` twice, assert the same id comes back both times) so a
 divergence shows up as a failing test rather than a surprise in production.
 
@@ -427,11 +430,9 @@ the text above, all deliberate:
   out and then fetching it again to get the record. Falling back instead gives
   the same answer for one request on a published record and two on a draft.
 - **The published record wins when both exist**, which is the same answer
-  `is_draft(files_based=True)` gives. That is provisional: 13.3's open question is
-  exactly whether a read should return a published record's *pending* metadata
-  instead, and it is settled in Part 6. The docstring says which one you get, and
-  `test_get_record_prefers_the_published_record` pins it, so changing our mind in
-  Part 6 has to be deliberate.
+  `is_draft(files_based=True)` gives. *(Part 6 kept it: the published record is
+  what the record says to everyone else, and `get_draft` is how to read the
+  pending changes. See 13.3.)*
 - **The reads return `dict[str, Any]`, i.e. the parsed JSON, for now.** Typed
   models are the right end state and are listed in Part 6's work items, because
   typing a record means typing its `metadata`, which is exactly Part 6's job.
@@ -444,7 +445,8 @@ the text above, all deliberate:
   the wrapper; this is part of the break.
 - **`user_controlled_only` is not here yet.** Which keys Zenodo rather than the
   user controls is a schema question, so it lands with Part 6 rather than being
-  guessed at now.
+  guessed at now. *(Part 6's answer: it is not needed at all — `Metadata.to_json`
+  only ever emits the shape Zenodo accepts.)*
 - **The legacy `retrieve_metadata` is now `retrieve_metadata_legacy`**, freeing
   the name for the new helper, exactly as was done for `create_new_version`. It
   and the `retrieve-metadata` CLI command go in Part 8.
@@ -795,7 +797,9 @@ Naming symmetry with Part 4: `mirror_files` is what `FilesMode.mirror` calls, an
 
 ## Part 4 — New versions — ✅ IMPLEMENTED
 
-**Done.** `new_version`, `import_files`, `publish`, `update_metadata`,
+**Done.** `new_version` (renamed `create_or_get_new_version` in Part 6, since it
+returns the version already in progress rather than always creating one),
+`import_files`, `publish`, `update_metadata`,
 `get_latest_version_id`, `FilesMode` and the `create_new_version` helper, with
 unit tests and live sandbox tests
 (`tests/integration/test_versions_integration.py`). Deltas and findings, all
@@ -912,7 +916,8 @@ all deliberate:
   answered the question. Deleting an edit draft leaves the published record
   untouched, and a `GET` on `/draft` does not create one — a freshly published
   record `404`s until a draft is explicitly asked for. This is the behaviour
-  §1.2.1's `get_or_create_draft` will wrap.
+  §1.2.1's `get_or_create_draft` will wrap
+  (`create_or_get_edited_metadata_draft`, as of Part 6).
 - **The write paths do not go through `list_files`.** `_diff_files`,
   `import_files` and `delete_all_files` always mean the draft, so they use a
   private `_list_draft_files` and there is no resolution step, and no ambiguity,
@@ -1052,7 +1057,109 @@ needs.
 
 ---
 
-## Part 6 — Metadata schema (the main migration cost)
+## Part 6 — Metadata schema (the main migration cost) — ✅ IMPLEMENTED
+
+**Done** (sequencing step 3). `openscm_zenodo/metadata.py` (`Metadata`, `Creator`,
+`PersonOrOrg`, `Affiliation`, `Identifier`, `Right`, `load_metadata`,
+`as_metadata`, `check_not_legacy`), `Record` in `zenodo.py`, the typed reads,
+`create_or_get_edited_metadata_draft` / `has_edited_metadata_draft`,
+the `update_metadata` guard and `publish`'s
+pre-flight validation, with unit tests (`tests/test_metadata.py`, and the write
+paths in `tests/test_versions.py`) and live sandbox tests
+(`tests/integration/test_metadata_integration.py`, plus the in-place correction
+in `test_publish_integration.py`). 13.3 is settled — see below. Deltas from the
+text below, all deliberate:
+
+- **The models are split by what Zenodo requires of them.** `Person` /
+  `Organisation` and `Creator` / `Contributor` are separate classes rather than
+  one with a `type` and an optional `role`, so "a person needs a `family_name`,
+  an organisation needs a `name`, a contributor needs a `role` and a creator may
+  not have one" is guaranteed at construction instead of being re-checked in
+  `find_problems`.
+- **The whole schema is modelled**, not just the common fields: `subjects`,
+  `contributors`, `dates`, `related_identifiers`, `funding` and `languages` as
+  well. `raw` is empty for the production record the tests read, which is the
+  point — it is now the place things Zenodo *adds later* land, rather than the
+  place half the schema lives.
+- **`Metadata.from_file` replaced `load_metadata`, and `as_metadata` is gone.**
+  Methods take a `Metadata` and nothing else, so a `Metadata | Mapping | Path`
+  union does not leak through every signature; converting happens once, at the
+  boundary, where the error can name the file.
+- **Zenodo discards values it cannot read rather than refusing them**, verified
+  against the sandbox: a `publication_date` of `"2021-13-45"` and a `version` of
+  200 characters both come back `200` with the field simply absent. That is the
+  strongest argument for validating at all, and it is why `update_metadata` now
+  diffs what came back against what it sent and warns about the difference.
+- **`publication_date` is EDTF level 0, not `YYYY-MM-DD`** — also verified:
+  `"2021"`, `"2021-03"` and `"2021-03-09/2021-04-10"` are all accepted. The
+  first version of `find_problems` would have rejected metadata Zenodo is happy
+  with. `is_edtf_date` checks the field widths itself and hands the values to
+  `datetime.date`, rather than using a regular expression: the near misses
+  (`"2021-3-09"`, full-width digits, a leading `+`) are the whole point, and
+  they are easier to enumerate as tests than to read out of a pattern.
+- **Warnings go through `warnings.warn`, not the logger.** The logger is
+  disabled until a caller enables it, so a warning about Zenodo quietly
+  discarding a field never reached the person who most needed it. They carry a
+  `ZenodoWarning` category so they can be silenced or promoted as a group.
+- **Vocabulary checks cover every vocabulary field**, not just `resource_type`:
+  `find_unknown_vocabulary_values` also checks identifier schemes and relation
+  types, and names where each unrecognised value is.
+- **Two draft readers, because Zenodo has one endpoint for two things.**
+  `get_draft` returns an unpublished record and never a published record's
+  pending metadata edits; `get_edited_metadata_draft` reads those, without
+  starting any. The distinction is not cosmetic — the endpoint answers `200` in
+  both cases, so the returned document has to be inspected.
+- **There is no `user_controlled_only`, and it is not coming.** It existed so
+  that metadata read off one record could safely be written to another;
+  `Metadata.to_json` only ever emits the shape Zenodo accepts, so that is now
+  unconditional and there is nothing left for a flag to strip. What Zenodo adds
+  on the way out is not a set of server-owned *keys* — it is display text
+  expanded into the vocabulary entries themselves (`resource_type.title` in
+  every locale, `rights[].description`/`icon`/`props`), so a key-stripping flag
+  was the wrong shape for the problem in the first place.
+- **Verified against the sandbox: Zenodo accepts the expanded shape back.**
+  Sending a production record's metadata verbatim, expansions and all, is
+  accepted. So dropping them is about not disagreeing with Zenodo, not about
+  being rejected — but it does mean `to_json` is stable, which is what
+  `test_to_json_is_stable` pins.
+- **`Record.is_published` is gone.** It and `is_draft` were two names for one
+  question, so `is_draft` is now simply its opposite, and
+  `is_edited_metadata_draft` carries what `is_published` was really being used
+  for on the draft endpoint.
+- **`Metadata`'s fields are all optional.** A draft's metadata legitimately is
+  partial: Zenodo only checks completeness at publish. So `from_json` tolerates
+  anything and `find_problems`/`validate` are where completeness lives.
+- **Validation is split by when it bites.** Structural mistakes (legacy schema,
+  legacy creators) raise at parse time, so they cannot reach the wire.
+  Completeness is checked by `publish(validate=True)`, not by
+  `update_metadata` — filling a draft in over several calls is normal, and
+  refusing it would break that. Confirmed live: Zenodo reports one *round* of
+  missing fields at a time, so its own answer never lists everything.
+- **`Record` lives in `zenodo.py`, not its own module.** It needs `RecordID` and
+  `ParentID`, and moving those out of `zenodo.py` would break every
+  `[...][openscm_zenodo.zenodo.RecordID]` docs cross-reference for no gain.
+- **`get_or_create_draft` is `create_or_get_edited_metadata_draft`, and returns
+  a `Record`.** An edit draft keeps the record's ID, so the ID is not news; the
+  draft is. The name says which of the two draft-shaped things it means, and the
+  method applies only to published records — a record which was never published
+  *is* a draft, and asking it for one raises `RecordNotPublishedError`.
+  `has_draft` became `has_edited_metadata_draft` on the same grounds.
+- **`new_version` is `create_or_get_new_version`**, at both the method and the
+  helper, because it returns the version already in progress rather than always
+  creating one. **`create_or_get_*` is the house word order** for this pattern,
+  so the metadata one matches it.
+- **Every method which takes a record ID also takes a `Record`.** One
+  `get_record_id` coercion, applied at every public entry point, with a test
+  which walks the class and fails if a method is added without it — a missed
+  coercion would put a `repr` in a URL path, which is a silent wrong request
+  rather than a crash.
+- **`update_metadata` does not check first, it translates the failure.** The
+  guard is a `404` from the `PUT` turned into `RecordNotWritableError` (or
+  `RecordNotFoundError`, distinguished by one look at `/api/records/{id}` on the
+  error path), so the happy path costs nothing extra.
+- **`RecordNotWritableError` covers both files and metadata**, via a `what`
+  parameter, rather than being two exceptions. 13.5's step 1 message for files
+  is the `what="files"` branch and is already written.
 
 InvenioRDM's metadata schema differs substantially from the legacy deposit form.
 This is a **breaking change for every caller** and the bulk of the work.
@@ -1613,7 +1720,7 @@ implemented:
 | parent id | `get_parent_id` | prod (read) | ✅ |
 | `POST /api/records` | `create_record` | sandbox |  |
 | `GET /api/records/{id}/draft` | `get_draft` | sandbox | ✅ |
-| `POST /api/records/{id}/draft` | `get_or_create_draft` | sandbox |  |
+| `POST /api/records/{id}/draft` | `create_or_get_edited_metadata_draft` | sandbox | ✅ |
 | `PUT /api/records/{id}/draft` | `update_metadata` | sandbox | ✅ |
 | `POST /api/records/{id}/draft/files` | upload init | sandbox | ✅ |
 | `PUT .../draft/files/{name}/content` | upload content | sandbox | ✅ |
@@ -1639,7 +1746,7 @@ On top of per-endpoint coverage:
   one — the embargoed path from Part 5.
 - **Idempotent re-run**: `upload_files` twice with unchanged files uploads nothing
   the second time; `download_files` twice re-downloads nothing.
-- **Draft idempotency** (sandbox, Part 1.2.1): `get_or_create_draft` twice on a
+- **Draft idempotency** (sandbox, Part 1.2.1): `create_or_get_edited_metadata_draft` twice on a
   published record returns the same draft id, and `new_version` twice returns the
   same next-version id — pinning the upstream InvenioRDM get-or-create behaviour
   against Zenodo's actual build.
@@ -1702,13 +1809,13 @@ records what it takes to guarantee it *ourselves*.
 |---|---|---|
 | `download_file`, `download_files`, `list_files` | `is_draft(record_id)`, then the matching listing endpoint; content follows the listing's `content_url`, so the two endpoints are never told apart twice | ✅ |
 | **file writes** — `upload_file(s)`, `mirror_files`, `delete_file(s)`, `delete_all_files`, `import_files` | hard-coded `/draft` in the URL | ✅ in effect, see 13.2 |
-| **metadata / lifecycle** — `update_metadata`, `publish` | hard-coded `/draft` in the URL | open question, see 13.3 |
+| **metadata / lifecycle** — `update_metadata`, `publish` | hard-coded `/draft` in the URL; a `404` from `update_metadata` becomes `RecordNotWritableError` | ✅ settled, see 13.3 |
 | `new_version` | `POST /api/records/{id}/versions` — published by design | ✅ the documented exception |
-| `is_draft(record_id, *, files_based=True)` | the question itself: published first, then draft | ✅ for files, `NotImplementedError` for metadata (13.3) |
+| `is_draft(record_id)` | the question itself: published first, then draft | ✅ — `files_based` is gone, `has_draft` is the other question (13.3) |
 | `ZenodoInteractor.*` (legacy) | the legacy deposit API's own draft rules | legacy; dies with Parts 6/8, not worth hardening |
 
-No public method takes a `draft` argument. The only knob left is `is_draft`'s
-`files_based`, which exists solely to refuse the case in 13.3.
+No public method takes a `draft` argument, and `is_draft` no longer takes a
+`files_based` argument either — 13.3 split it into two questions instead.
 
 ### 13.2 The invariant today: upheld, but by Zenodo rather than by us
 
@@ -1765,7 +1872,54 @@ files_based=True)` is `True`.
   rule out in-place metadata correction, which is a feature Zenodo genuinely
   offers.
 
-### 13.3 Metadata: still not thought through — keep the `NotImplementedError`
+### 13.3 Metadata — ✅ SETTLED (with Part 6)
+
+**Settled**, and the `NotImplementedError` is gone. What was decided, against the
+four questions below:
+
+- **`is_draft` loses `files_based` entirely.** The question it names — "has this
+  record been published?" — never had two answers; the second question was
+  hiding behind the flag. It is now
+  **`has_edited_metadata_draft(record_id)`**: "does this published record have
+  metadata edits which have not gone out?". A published record with a pending
+  correction answers `False` to `is_draft` and `True` to that, and both are
+  useful. It applies **only to published records** — an unpublished record *is*
+  a draft, so the question does not arise and it raises
+  `RecordNotPublishedError` rather than answering `False` — and it needs a token
+  (drafts are invisible without one).
+- **It costs a request of its own, and has to.** Verified against the sandbox:
+  `GET /api/records/{id}` reports `is_draft: false` for a published record
+  whether or not an edited metadata draft exists. The only document which says
+  so is the draft itself, where `is_draft` and `is_published` are *both* true —
+  which is exactly what `Record.is_edited_metadata_draft` reads. So the answer
+  cannot be derived from a record already in hand, and
+  `test_a_published_record_never_reports_pending_edits` pins that, so we notice
+  if Zenodo starts saying.
+- **A read returns the published record**, and `get_draft` returns the pending
+  changes. The published record is what the record says to everyone else, so it
+  is the one an unqualified read should mean. `test_get_record_prefers_the_published_record`
+  keeps pinning it; the docstring now states it as a decision rather than as a
+  provisional answer.
+- **`update_metadata` does not create the draft it needs.** It refuses a
+  published record whose edits have not been started, with
+  `RecordNotWritableError` naming `create_or_get_edited_metadata_draft` and
+  `create_or_get_new_version`.
+- **In-place correction is opt-in, and the opt-in is
+  `create_or_get_edited_metadata_draft`.** Not a flag: starting the edits is
+  already an explicit act, it is idempotent, and it reads at the call site as
+  what it is. So the sequence is `create_or_get_edited_metadata_draft` →
+  `update_metadata` → `publish`, and each step says what it does.
+- **`publish` is not guarded.** It is the second half of the sequence above, and
+  it already `404`s without a draft. It does now validate the draft's metadata
+  first (Part 6), which is a different concern.
+
+Verified live in `test_editing_a_published_record_in_place`: a published record
+is refused, taking the draft makes the same call succeed, the public metadata
+does not change until the draft is published, and the ID is unchanged throughout.
+
+The original text is kept below for the reasoning.
+
+---
 
 `is_draft(..., files_based=False)` raises `NotImplementedError` and **stays that
 way for now**. This is a deliberate placeholder, not an oversight.
@@ -1889,10 +2043,10 @@ that does need Part 6.
    re-resolve a download's listing once on `404`. Independent of steps 1–3 and can
    land either side of them.
 
-5. **Settle metadata (13.3) as part of Part 6**, with `get_or_create_draft` from
-   §1.2.1 — including whether `update_metadata` and `publish` get a guard of their
-   own and what the opt-in to in-place correction looks like. Until this lands,
-   keep the `NotImplementedError`.
+5. ~~**Settle metadata (13.3) as part of Part 6**, with `get_or_create_draft`
+   from §1.2.1 — including whether `update_metadata` and `publish` get a guard of
+   their own and what the opt-in to in-place correction looks like.~~
+   ✅ **DONE** with Part 6; the decisions are written up in 13.3.
 
 **Tests** (Part 12). Steps 1–4 are unit-level with a recording session — the races
 are not reproducible against the live API:
@@ -1919,14 +2073,20 @@ pins that in place would be pinning the wrong behaviour.
 
 ## Suggested sequencing
 
-**Where we are.** Steps 0, 1, 2, 6 and 7 are done, and step 5 is done apart from
-Part 11. They were taken out of order: uploads, mirror, versions and download
-(Parts 2–5) landed before the read paths and before the metadata schema, so the
-transport was exercised by the file work instead. Nothing downstream broke as a
-result — `update_metadata` landed as a pass-through with the schema explicitly
-deferred to Part 6, so step 3 still does the schema work it always did. The
-outstanding steps, in the order to take them, are: **3** (Part 6, which also
-settles 13.3), **4**, the **Part 11** remainder of 5, **2b**, **8** and **9**.
+**Where we are.** Steps 0, 1, 2, 3, 6 and 7 are done, and step 5 is done apart
+from Part 11. They were taken out of order: uploads, mirror, versions and
+download (Parts 2–5) landed before the read paths and before the metadata
+schema, so the transport was exercised by the file work instead. Nothing
+downstream broke as a result — `update_metadata` landed as a pass-through with
+the schema explicitly deferred to Part 6, and step 3 then did the schema work it
+always did. The outstanding steps, in the order to take them, are: **4**, the
+**Part 11** remainder of 5, **2b**, **8** and **9**.
+
+Step 4 is now smaller than it was: `create_or_get_edited_metadata_draft`,
+`update_metadata` and
+`publish` landed with step 3, because the metadata decisions (13.3) are what they
+turn on. What is left of it is `create_record`, `reserve_doi`, and confirming
+`new_version` / `import_files` / `delete_files` need nothing further.
 
 0. ~~**`copier update` (Part 0)** — refresh the template from `v0.14.2`, keep
    `include_cli: true`, fix `project_description_short`, then re-lock and run
@@ -1947,13 +2107,16 @@ settles 13.3), **4**, the **Part 11** remainder of 5, **2b**, **8** and **9**.
    and self-contained, and **not urgent**: Zenodo already refuses these writes
    (13.2), so this is hardening and error quality. Slot it in wherever convenient;
    it does not gate step 3.
-3. **Metadata (Part 6)** — schema rewrite + `load_metadata` + validation. Biggest
-   item; do it early so everything downstream uses the right shape. Part 13.3 —
-   the `is_draft(files_based=False)` `NotImplementedError`, and whether
-   `update_metadata`/`publish` may target a published record — is settled here.
-4. **Write paths** — `create_record`, `get_or_create_draft` (Part 1.2.1),
-   `update_metadata`, `publish`, `reserve_doi`, `new_version` / `import_files`,
-   `delete_files`.
+3. ~~**Metadata (Part 6)** — schema rewrite + `load_metadata` + validation.
+   Biggest item; do it early so everything downstream uses the right shape.
+   Part 13.3 — the `is_draft(files_based=False)` `NotImplementedError`, and
+   whether `update_metadata`/`publish` may target a published record — is
+   settled here.~~ ✅ **DONE** — plus the typed `Record`,
+   `create_or_get_edited_metadata_draft` and `has_edited_metadata_draft`.
+   See the note at the top of Part 6 and the decisions in 13.3.
+4. **Write paths** — `create_record` and `reserve_doi` (Part 7). ~~`get_or_create_draft`
+   (Part 1.2.1), `update_metadata`, `publish`~~ ✅ **DONE with step 3**;
+   `new_version` / `import_files` / `delete_files` landed with Parts 3–4.
 5. **Uploads (Parts 2, 11)** — ~~the init→content→commit `upload_file`,
    `tenacity` upload retry, checksum verification, `upload_files` parallelism,
    the shared `leave=False` progress-bar helper (Part 2.1)~~ ✅ **DONE** (Part 2,

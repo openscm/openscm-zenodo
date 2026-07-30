@@ -86,15 +86,17 @@ def test_default_end_to_end_flow_cli(test_data_dir):
     }
     assert comparable_metadata_from_user == comparable_metadata_from_publish_response
 
-    assert len(publish_response_json["files"]) == len(files_to_upload)
     # Zenodo doesn't support directories, so uploaded files should be flat.
     # Zipping files is the work around apparently.
     # See https://support.zenodo.org/help/en-gb/1-upload-deposit/74-can-i-upload-folders-directories
     publish_response_uploaded_files = [
         file_record["filename"] for file_record in publish_response_json["files"]
     ]
-    assert set(publish_response_uploaded_files) == set(
-        [f.name for f in files_to_upload]
+    # A subset, not an exact match: the legacy API's "new version" always copies
+    # the previous version's files across, and this sandbox record's chain has
+    # picked up files from other tests over the years.
+    assert set(f.name for f in files_to_upload).issubset(
+        publish_response_uploaded_files
     )
 
 

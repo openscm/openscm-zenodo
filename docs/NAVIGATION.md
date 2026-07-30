@@ -9,6 +9,7 @@ See https://oprypin.github.io/mkdocs-literate-nav/
     - [How to upload to Zenodo](how-to-guides/how-to-upload-to-zenodo.py)
 - [Tutorials](tutorials/index.md)
 - [Further background](further-background/index.md)
+    - [Zenodo's metadata schema](further-background/metadata-schema.md)
     - [Dependency pinning and testing](further-background/dependency-pinning-and-testing.md)
 - [Development](development.md)
 - [Command-line interface](cli/index.md)

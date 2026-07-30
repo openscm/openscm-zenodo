@@ -9,6 +9,7 @@ so `except ZenodoError` catches everything we raise on purpose.
 from __future__ import annotations
 
 import json
+import warnings
 from collections.abc import Collection
 from typing import TYPE_CHECKING, Any
 
@@ -17,11 +18,77 @@ from openscm_zenodo.logging import mask_token
 if TYPE_CHECKING:
     import requests
 
+_CLIENT_PATH = "openscm_zenodo.zenodo.ZenodoClient"
+"""
+Full path to the client
+
+Error messages name the method to reach for next, in full, so that it can be
+pasted into an import. Building those names from one place here means the
+several messages which point at the same method cannot disagree about where it
+lives, and a rename shows up as one edit rather than a hunt through strings.
+"""
+
+NEW_VERSION_PATH = f"{_CLIENT_PATH}.create_or_get_new_version"
+"""Full path to the method which releases a change as a new version"""
+
+EDITED_METADATA_DRAFT_PATH = f"{_CLIENT_PATH}.create_or_get_edited_metadata_draft"
+"""Full path to the method which starts metadata edits on a published record"""
+
+READ_METADATA_EDITS_PATH = f"{_CLIENT_PATH}.get_edited_metadata_draft"
+"""Full path to the method which reads metadata edits on a published record"""
+
+UPDATE_METADATA_PATH = f"{_CLIENT_PATH}.update_metadata"
+"""Full path to the method which writes metadata"""
+
 
 class ZenodoError(Exception):
     """
     Base class for all errors raised by `openscm_zenodo`
     """
+
+
+class ZenodoWarning(UserWarning):
+    """
+    Base class for all warnings raised by `openscm_zenodo`
+
+    These go through
+    [`warnings.warn`](https://docs.python.org/3/library/warnings.html)
+    rather than through our logger, because the logger is disabled until a
+    caller turns it on (see `openscm_zenodo/__init__.py`) and these are things
+    a caller needs to hear whether or not they have configured any logging —
+    typically that Zenodo has quietly ignored something they asked for.
+
+    Being a category of its own means they can be silenced or turned into errors
+    as a group:
+
+    ```python
+    import warnings
+
+    from openscm_zenodo.exceptions import ZenodoWarning
+
+    warnings.simplefilter("error", ZenodoWarning)
+    ```
+    """
+
+
+def warn_zenodo(message: str, *, stacklevel: int = 3) -> None:
+    """
+    Warn about something a caller needs to hear, whatever their logging setup
+
+    Parameters
+    ----------
+    message
+        What to say
+
+    stacklevel
+        Which frame the warning should be attributed to.
+
+        The default is right for a warning raised directly in the body of a
+        public method: `1` is this function, `2` is the method, and `3` is
+        whoever called the method, which is the line worth pointing at.
+        Add one for each extra frame between the public method and here.
+    """
+    warnings.warn(message, ZenodoWarning, stacklevel=stacklevel)
 
 
 class MissingTokenError(ZenodoError):
@@ -118,6 +185,40 @@ class ChecksumMismatchError(ZenodoError):
             f"Locally we calculated {local_md5!r}, "
             f"Zenodo reports {remote_md5!r}. "
             "Most likely explanation: the transfer was corrupted."
+        )
+
+        super().__init__(msg)
+
+
+class FileTransferFailedError(ZenodoError):
+    """
+    Raised when Zenodo accepts a file's content and then reports that it failed
+    """
+
+    def __init__(self, filename: str, *, record_id: str, errors: str) -> None:
+        """
+        Initialise
+
+        Parameters
+        ----------
+        filename
+            Name of the file whose transfer failed
+
+        record_id
+            ID of the record it was going to
+
+        errors
+            What Zenodo said about the failure
+        """
+        self.filename = filename
+        self.record_id = record_id
+        self.errors = errors
+
+        msg = (
+            f"Zenodo accepted the upload of {filename!r} to record {record_id!r} "
+            f"and then reported that it failed: {errors}. "
+            "The response was a 200, so this is Zenodo's file storage rather "
+            "than the request. It is usually transient, so can justifiably be retried."
         )
 
         super().__init__(msg)
@@ -222,6 +323,192 @@ class FileNotOnRecordError(ZenodoError):
         msg = (
             f"Record {record_id!r} has no {file_or_files} {missing_formatted}. "
             f"Available: {available_formatted}."
+        )
+
+        super().__init__(msg)
+
+
+class RecordNotWritableError(ZenodoError):
+    """
+    Raised when a record cannot be written to the way that was asked for
+    """
+
+    def __init__(
+        self,
+        record_id: str,
+        *,
+        zenodo_domain: str,
+        what: str = "files",
+    ) -> None:
+        """
+        Initialise
+
+        Parameters
+        ----------
+        record_id
+            ID of the record which cannot be written to
+
+        zenodo_domain
+            The Zenodo domain the record is on
+
+        what
+            What we were trying to write, `"files"` or `"metadata"`.
+        """
+        self.record_id = record_id
+        self.zenodo_domain = zenodo_domain
+        self.what = what
+
+        msg = f"Record {record_id!r} on {zenodo_domain} is published, "
+        if what == "metadata":
+            msg += (
+                "so it has no draft to write metadata to. "
+                "To correct a published record's metadata in place "
+                "(same ID, same DOI), start the edits first with "
+                f"`{EDITED_METADATA_DRAFT_PATH}`, then update and publish those. "
+                "To release the change as a new version instead, "
+                f"use `{NEW_VERSION_PATH}`."
+            )
+
+        else:
+            msg += (
+                f"so its {what} cannot be changed. "
+                "Zenodo locks them when a record is published. "
+                f"To release a change, create a new version with `{NEW_VERSION_PATH}`."
+            )
+
+        super().__init__(msg)
+
+
+class DraftRecordDraftMetadataEditsError(ZenodoError):
+    """
+    Raised when the user tries to access draft metadata edits on a draft record
+
+    This doesn't make sense on a draft record: just edit the record directly.
+    The idea of a metadata-only edit only applies to published records.
+    """
+
+    def __init__(self, record_id: str, *, zenodo_domain: str) -> None:
+        """
+        Initialise
+
+        Parameters
+        ----------
+        record_id
+            ID of the record which is not published
+
+        zenodo_domain
+            The Zenodo domain the record is on
+        """
+        self.record_id = record_id
+        self.zenodo_domain = zenodo_domain
+
+        msg = (
+            f"Record {record_id!r} on {zenodo_domain} has not been published, "
+            "so it is already a draft and does not have a separate draft of its "
+            "metadata. Edit it directly with "
+            f"`{UPDATE_METADATA_PATH}`."
+        )
+
+        super().__init__(msg)
+
+
+class PublishedRecordDraftError(ZenodoError):
+    """
+    Raised when the draft of a published record is asked for
+
+    A published record is not a draft. It can have draft metadata edits, which
+    are a different thing and have their own methods; the message points at
+    them, because asking for a published record's draft is usually a sign of
+    wanting those.
+    """
+
+    def __init__(self, record_id: str, *, zenodo_domain: str) -> None:
+        """
+        Initialise
+
+        Parameters
+        ----------
+        record_id
+            ID of the record which is published
+
+        zenodo_domain
+            The Zenodo domain the record is on
+        """
+        self.record_id = record_id
+        self.zenodo_domain = zenodo_domain
+
+        msg = (
+            f"Record {record_id!r} on {zenodo_domain} is published, "
+            "so it is not a draft. "
+            "To read its unpublished metadata edits, if it has any, use "
+            f"`{READ_METADATA_EDITS_PATH}`; "
+            f"to start some, use `{EDITED_METADATA_DRAFT_PATH}`. "
+            f"To make a new version of it, use `{NEW_VERSION_PATH}`."
+        )
+
+        super().__init__(msg)
+
+
+class DraftMetadataEditsNotFoundError(ZenodoError):
+    """
+    Raised when a published record has no draft metadata edits to read
+    """
+
+    def __init__(self, record_id: str, *, zenodo_domain: str) -> None:
+        """
+        Initialise
+
+        Parameters
+        ----------
+        record_id
+            ID of the record which has no draft
+
+        zenodo_domain
+            The Zenodo domain the record is on
+        """
+        self.record_id = record_id
+        self.zenodo_domain = zenodo_domain
+
+        msg = (
+            f"Record {record_id!r} on {zenodo_domain} is published "
+            "and has no unpublished metadata edits, so there is no draft to read. "
+            f"To start editing its metadata, use `{EDITED_METADATA_DRAFT_PATH}`."
+        )
+
+        super().__init__(msg)
+
+
+class MetadataValidationError(ZenodoError, ValueError):
+    """
+    Raised when metadata is not something Zenodo will accept
+    """
+
+    def __init__(self, problems: Collection[str], *, description: str) -> None:
+        """
+        Initialise
+
+        Parameters
+        ----------
+        problems
+            The problems we found.
+
+            Each should be a complete sentence,
+            because they are listed verbatim in the message.
+
+        description
+            Description of what the metadata was going to be used for.
+
+            This is injected into the message,
+            so it should complete the sentence
+            "This metadata cannot be used to ...".
+        """
+        self.problems = tuple(problems)
+        self.description = description
+
+        problems_formatted = "\n".join(f"- {problem}" for problem in self.problems)
+        msg = (
+            f"This metadata cannot be used to {description}. "
+            f"Problems we found:\n{problems_formatted}"
         )
 
         super().__init__(msg)

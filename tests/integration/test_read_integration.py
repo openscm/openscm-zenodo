@@ -11,7 +11,12 @@ import json
 
 import pytest
 
-from openscm_zenodo.exceptions import RecordNotFoundError, ZenodoHTTPError
+from openscm_zenodo.exceptions import (
+    RecordNotFoundError,
+    ZenodoHTTPError,
+    ZenodoWarning,
+)
+from openscm_zenodo.metadata import Metadata
 from openscm_zenodo.zenodo import (
     CitationFormat,
     ZenodoClient,
@@ -54,12 +59,14 @@ def test_get_published(client):
     """
     record = client.get_published(PUBLISHED_RECORD_ID)
 
-    assert str(record["id"]) == PUBLISHED_RECORD_ID
-    assert record["is_published"]
-    assert not record["is_draft"]
-    assert record["pids"]["doi"]["identifier"] == "10.5281/zenodo.4589756"
-    assert record["access"]["record"] == "public"
-    assert record["parent"]["id"] == PUBLISHED_RECORD_PARENT_ID
+    assert record.record_id == PUBLISHED_RECORD_ID
+    assert not record.is_draft
+    assert not record.is_edited_metadata_draft
+    assert record.doi == "10.5281/zenodo.4589756"
+    assert record.parent_doi == "10.5281/zenodo.4589726"
+    assert record.access.record == "public"
+    assert not record.access.embargo.active
+    assert record.parent_id == PUBLISHED_RECORD_PARENT_ID
 
 
 def test_get_published_which_is_not_there(client):
@@ -96,12 +103,50 @@ def test_get_metadata(client):
     """
     metadata = client.get_metadata(PUBLISHED_RECORD_ID)
 
-    assert metadata["title"] == (
+    assert metadata.title == (
         "Reduced Complexity Model Intercomparison Project (RCMIP) protocol"
     )
-    assert metadata["resource_type"]["id"] == "dataset"
-    assert metadata["rights"][0]["id"] == "cc-by-sa-4.0"
-    assert "access_right" not in metadata
+    assert metadata.resource_type == "dataset"
+    assert metadata.rights[0].id == "cc-by-sa-4.0"
+    assert metadata.creators[0].name == "Zebedee Nicholls"
+    assert metadata.creators[0].entity.identifiers[0].scheme == "orcid"
+    assert metadata.creators[0].affiliations[0].name.startswith("Australian-German")
+    assert "access_right" not in metadata.raw
+
+
+def test_get_metadata_round_trips(client):
+    """
+    Metadata read off a record is the shape which can be written to another
+
+    Zenodo expands vocabulary entries on the way out
+    (a resource type's title, a licence's description and icon),
+    and those are its to fill in, so they are dropped on the way back in.
+    Everything we do not model has to survive the trip.
+    """
+    metadata = client.get_metadata(PUBLISHED_RECORD_ID)
+
+    as_json = metadata.to_json()
+
+    assert as_json["resource_type"] == {"id": "dataset"}
+    assert as_json["rights"] == [{"id": "cc-by-sa-4.0"}]
+    assert {"subject": "rcmip"} in as_json["subjects"]
+    assert as_json["languages"] == [{"id": "eng"}]
+    # Everything this record uses is modelled, so `raw` is empty.
+    # A key turning up here means Zenodo has something we do not model yet;
+    # it still round-trips, which is what `raw` is for.
+    assert metadata.raw == {}
+    # Sending this back and reading it again is a no-op,
+    # i.e. there is nothing left which only survives one trip
+    assert Metadata.from_json(as_json).to_json() == as_json
+
+
+def test_metadata_of_a_published_record_is_complete(client):
+    """
+    A published record's metadata passes the check we make before publishing
+
+    If it did not, our idea of what Zenodo requires would be wrong.
+    """
+    assert client.get_metadata(PUBLISHED_RECORD_ID).find_problems() == ()
 
 
 def test_get_metadata_of_a_record_which_is_not_there(client):
@@ -180,10 +225,13 @@ def test_get_citation_style_zenodo_does_not_know(client):
     A style Zenodo does not know is a clean error, not a traceback
 
     We only fail up front on styles we have verified are rejected,
-    so an unknown one gets sent and Zenodo has the final say.
+    so an unknown one gets sent, with a warning, and Zenodo has the final say.
     That answer has to stay readable.
     """
-    with pytest.raises(ZenodoHTTPError, match="Citation string style not found"):
+    with (
+        pytest.warns(ZenodoWarning, match="not checked the citation style"),
+        pytest.raises(ZenodoHTTPError, match="Citation string style not found"),
+    ):
         client.get_citation(
             PUBLISHED_RECORD_ID,
             fmt=CitationFormat.citation,

@@ -47,14 +47,21 @@ from openscm_zenodo.checksums import (
 )
 from openscm_zenodo.exceptions import (
     ChecksumMismatchError,
+    DraftMetadataEditsNotFoundError,
+    DraftRecordDraftMetadataEditsError,
     FileNotOnRecordError,
+    FileTransferFailedError,
     MissingTokenError,
+    PublishedRecordDraftError,
     RecordNotFoundError,
+    RecordNotWritableError,
     UnknownCitationStyleError,
     ZenodoError,
     ZenodoHTTPError,
+    warn_zenodo,
 )
 from openscm_zenodo.logging import mask_token
+from openscm_zenodo.metadata import Metadata, find_discarded_metadata
 from openscm_zenodo.progress import (
     PositionAllocator,
     get_file_progress_bar,
@@ -771,6 +778,348 @@ class FileEntry:
 
 
 @define
+class Embargo:
+    """
+    An embargo on a record, i.e. a date before which it is not public
+    """
+
+    active: bool = False
+    """Is the embargo in force?"""
+
+    until: str | None = None
+    """Date the embargo lifts, as `YYYY-MM-DD`"""
+
+    reason: str | None = None
+    """Why the record is embargoed"""
+
+    @classmethod
+    def from_json(cls, raw: Mapping[str, Any]) -> Embargo:
+        """
+        Initialise from Zenodo's description of an embargo
+
+        Parameters
+        ----------
+        raw
+            Zenodo's description of the embargo
+
+        Returns
+        -------
+        :
+            Initialised `Embargo`
+        """
+        return cls(
+            active=bool(raw.get("active", False)),
+            until=raw.get("until"),
+            reason=raw.get("reason"),
+        )
+
+
+@define
+class Access:
+    """
+    Who may see a record and its files
+
+    Writing this is not supported yet — it lands with `create_record`,
+    where a record's access has to be set at creation anyway.
+    """
+
+    record: str = "public"
+    """Who may see the record itself, `"public"` or `"restricted"`"""
+
+    files: str = "public"
+    """Who may see its files, `"public"` or `"restricted"`"""
+
+    embargo: Embargo = field(factory=Embargo)
+    """The embargo, if there is one"""
+
+    status: str | None = None
+    """
+    Zenodo's summary of the two, e.g. `"open"`, `"embargoed"`, `"restricted"`
+
+    Zenodo derives this, so it is read-only.
+    """
+
+    @classmethod
+    def from_json(cls, raw: Mapping[str, Any]) -> Access:
+        """
+        Initialise from Zenodo's description of a record's access
+
+        Parameters
+        ----------
+        raw
+            Zenodo's description of the access
+
+        Returns
+        -------
+        :
+            Initialised `Access`
+        """
+        return cls(
+            record=raw.get("record", "public"),
+            files=raw.get("files", "public"),
+            embargo=Embargo.from_json(raw.get("embargo", {})),
+            status=raw.get("status"),
+        )
+
+
+@define
+class Version:
+    """
+    Where a record sits in its chain of versions
+    """
+
+    index: int | None = None
+    """
+    Which version this is, counting from one
+
+    `None` for a draft of a brand-new record, which is not a version of
+    anything yet.
+    """
+
+    is_latest: bool | None = None
+    """
+    Is this the latest *published* version?
+
+    `None` when Zenodo did not say.
+    """
+
+    is_latest_draft: bool | None = None
+    """
+    Is this the most recent version, published or not?
+
+    `None` when Zenodo did not say.
+    """
+
+    @classmethod
+    def from_json(cls, raw: Mapping[str, Any]) -> Version:
+        """
+        Initialise from Zenodo's description of a record's versions
+
+        Parameters
+        ----------
+        raw
+            Zenodo's description of the versions
+
+        Returns
+        -------
+        :
+            Initialised `Version`
+        """
+        return cls(
+            index=raw.get("index"),
+            is_latest=raw.get("is_latest"),
+            is_latest_draft=raw.get("is_latest_draft"),
+        )
+
+
+@define
+class Record:
+    """
+    A record on Zenodo, published or still a draft
+
+    Like [`FileEntry`][openscm_zenodo.zenodo.FileEntry],
+    the parts we model are pulled out into typed fields
+    and everything else Zenodo sent is kept in `raw`,
+    so a response which is not shaped the way we expect
+    fails at the point we read it.
+    """
+
+    record_id: RecordID
+    """ID of this version of the record"""
+
+    metadata: Metadata
+    """The record's metadata"""
+
+    is_draft: bool
+    """
+    Has this record never been published?
+
+    This is the opposite of "is it published", so there is only one of the two.
+    A published record which has an *edited metadata draft* is still published,
+    so this is `False` for it; the draft document itself is marked by
+    [`is_edited_metadata_draft`][openscm_zenodo.zenodo.Record.is_edited_metadata_draft].
+    """
+
+    is_edited_metadata_draft: bool
+    """
+    Is this document a published record's unpublished metadata changes?
+
+    A published record's metadata can be corrected in place, by taking a draft
+    of it, editing that and publishing it again under the same ID and DOI. This
+    is `True` only for that draft, i.e. only for what
+    [`create_or_get_edited_metadata_draft`][openscm_zenodo.zenodo.ZenodoClient.create_or_get_edited_metadata_draft]
+    hands back.
+
+    A record read with
+    [`get_published`][openscm_zenodo.zenodo.ZenodoClient.get_published]
+    is always `False` here, **even when such a draft exists**.
+    Asking whether a draft exists is a separate request,
+    see
+    [`has_edited_metadata_draft`][openscm_zenodo.zenodo.ZenodoClient.has_edited_metadata_draft]
+    or
+    [`create_or_get_edited_metadata_draft`][openscm_zenodo.zenodo.ZenodoClient.create_or_get_edited_metadata_draft]
+    to ensure that an edited metadata draft exists then get it.
+    """
+
+    parent_id: ParentID
+    """
+    ID which refers to all versions of this record
+
+    Resolving it (via e.g. Zenodo's web interface)
+    gives whichever version is the latest at the time.
+    """
+
+    access: Access
+    """Who may see the record and its files"""
+
+    pids: dict[str, Any]
+    """
+    Persistent identifiers Zenodo has minted for the record
+
+    For specific IDs, access the specific properties,
+    e.g. [`doi`][openscm_zenodo.zenodo.Record.doi],
+    rather than reaching in here.
+    """
+
+    version: Version
+    """Where this record sits in its chain of versions"""
+
+    raw: dict[str, Any] = field(repr=False)
+    """
+    Everything Zenodo sent about the record
+
+    Timestamps, links, statistics, custom fields and the file listing
+    all live here rather than each growing a field of its own.
+    """
+
+    @classmethod
+    def from_json(cls, raw: dict[str, Any]) -> Record:
+        """
+        Initialise from Zenodo's description of a record
+
+        Parameters
+        ----------
+        raw
+            Zenodo's description of the record.
+
+            This must be the native InvenioRDM serialisation,
+            i.e. what Zenodo sends for
+            `Accept: application/vnd.inveniordm.v1+json`.
+
+        Returns
+        -------
+        :
+            Initialised `Record`
+
+        Raises
+        ------
+        KeyError
+            `raw` is not shaped the way Zenodo describes a record
+        """
+        is_published = raw["is_published"]
+
+        return cls(
+            record_id=RecordID(str(raw["id"])),
+            metadata=Metadata.from_json(raw.get("metadata", {})),
+            is_draft=not is_published,
+            is_edited_metadata_draft=bool(raw["is_draft"] and is_published),
+            parent_id=ParentID(str(raw["parent"]["id"])),
+            access=Access.from_json(raw.get("access", {})),
+            pids=raw.get("pids", {}),
+            version=Version.from_json(raw.get("versions", {})),
+            raw=raw,
+        )
+
+    @property
+    def doi(self) -> str | None:
+        """
+        DOI of this version of the record
+
+        Returns
+        -------
+        :
+            The DOI, or `None` if one has not been minted or reserved yet.
+
+            A draft only has one once it has been published
+            or a DOI has been reserved for it.
+        """
+        doi = self.pids.get("doi", {}).get("identifier")
+
+        return cast("str | None", doi)
+
+    @property
+    def parent_doi(self) -> str | None:
+        """
+        DOI which refers to all versions of the record
+
+        This is the one to cite if the citation should not go stale:
+        it resolves to whichever version is the latest at the time.
+
+        Returns
+        -------
+        :
+            The DOI, or `None` if one has not been minted yet
+        """
+        doi = (
+            self.raw.get("parent", {}).get("pids", {}).get("doi", {}).get("identifier")
+        )
+
+        return cast("str | None", doi)
+
+    @property
+    def is_latest_version(self) -> bool | None:
+        """
+        Is this the latest published version of the record?
+
+        Returns
+        -------
+        :
+            Whether it is, or `None` if Zenodo did not say
+            (which it does not for a draft of a brand-new record)
+        """
+        return self.version.is_latest
+
+
+RecordIDLike: TypeAlias = "str | RecordID | Record"
+"""
+Anything we will take as "which record"
+
+A [`Record`][openscm_zenodo.zenodo.Record] is accepted as well as its ID so
+that a record which has just been handed back can be passed straight on,
+rather than having to be unwrapped at every call site.
+Note the asymmetry with metadata, which is only ever taken as a
+[`Metadata`][openscm_zenodo.metadata.Metadata]: a `Record` *is* an ID plus more,
+so nothing has to be guessed, whereas metadata given as a mapping or a path is
+a different thing which has to be interpreted.
+"""
+
+
+def get_record_id(record_id: RecordIDLike) -> RecordID:
+    """
+    Get the record ID out of whatever we were handed
+
+    Parameters
+    ----------
+    record_id
+        The record, or its ID
+
+    Returns
+    -------
+    :
+        The record's ID
+
+    Examples
+    --------
+    >>> get_record_id("4589756")
+    '4589756'
+    """
+    if isinstance(record_id, Record):
+        return record_id.record_id
+
+    return RecordID(str(record_id))
+
+
+@define
 class FileDiff:
     """
     The difference between a set of local files and a record's files
@@ -850,6 +1199,42 @@ def _run_in_parallel(
     return [future.result() for future in futures]
 
 
+def get_reported_errors(response: requests.models.Response) -> str | None:
+    """
+    Get the failure a successful-looking response is reporting, if it is reporting one
+
+    Zenodo answers a failed file transfer with a `200` whose body carries an
+    `errors` key, so a successful status code is not on its own proof that
+    anything happened.
+
+    Parameters
+    ----------
+    response
+        Response to look at
+
+    Returns
+    -------
+    :
+        What Zenodo said went wrong, or `None` if it did not say anything.
+
+        A body which is not JSON, or not an object, counts as not saying
+        anything: this is a safety net rather than a parser, and a response we
+        cannot read is not evidence of a failure.
+    """
+    try:
+        body = response.json()
+
+    except ValueError:
+        return None
+
+    if not isinstance(body, Mapping):
+        return None
+
+    errors = body.get("errors")
+
+    return None if not errors else str(errors)
+
+
 def should_retry_transfer(
     exc: BaseException,
     *,
@@ -871,9 +1256,9 @@ def should_retry_transfer(
     :
         `True` if the upload is worth trying again
     """
-    if isinstance(exc, ChecksumMismatchError):
-        # Not an HTTP failure: the request succeeded but the bytes were wrong
-        # so we need to retry.
+    if isinstance(exc, ChecksumMismatchError | FileTransferFailedError):
+        # Not HTTP failures: the request succeeded, but the bytes were wrong
+        # or Zenodo's storage dropped them, so we need to retry.
         return True
 
     if isinstance(exc, ZenodoHTTPError):
@@ -1277,7 +1662,7 @@ class ZenodoClient:
 
         return f"/api/records/{record_id}/draft/files/{quoted}{suffix}"
 
-    def delete_file(self, record_id: str | RecordID, filename: str) -> None:
+    def delete_file(self, record_id: RecordIDLike, filename: str) -> None:
         """
         Delete a file from a record
 
@@ -1292,6 +1677,7 @@ class ZenodoClient:
         filename
             Name of the file to delete, as it appears on Zenodo
         """
+        record_id = get_record_id(record_id)
         logger.info(f"Deleting {filename!r} from {record_id!r}")
         self._request(
             self._get_draft_file_path(record_id, filename),
@@ -1382,7 +1768,7 @@ class ZenodoClient:
             position=position,
         ) as progress_bar:
             with open(path, "rb") as file_handle:
-                self._request(
+                response = self._request(
                     self._get_draft_file_path(record_id, filename, "/content"),
                     method="PUT",
                     requires_auth=True,
@@ -1391,6 +1777,14 @@ class ZenodoClient:
                     timeout=self.timeout_upload,
                     description=f"upload {filename!r} to record {record_id!r}",
                 )
+
+        # Zenodo reports a storage failure here as a `200` with an `errors` key,
+        # not as an unsuccessful status, so the response has to be read.
+        errors = get_reported_errors(response)
+        if errors is not None:
+            raise FileTransferFailedError(
+                filename, record_id=str(record_id), errors=errors
+            )
 
     def _commit_file(self, record_id: str, filename: str) -> FileEntry:
         """
@@ -1515,7 +1909,7 @@ class ZenodoClient:
 
     def upload_file(  # noqa: PLR0913
         self,
-        record_id: str | RecordID,
+        record_id: RecordIDLike,
         path: Path,
         *,
         verify_checksum: bool = True,
@@ -1594,6 +1988,7 @@ class ZenodoClient:
         ZenodoHTTPError
             Zenodo rejected the upload
         """
+        record_id = get_record_id(record_id)
         filename = path.name
         logger.info(f"Uploading {path} as {filename!r} to record {record_id!r}")
 
@@ -1626,7 +2021,7 @@ class ZenodoClient:
         return entry
 
     def _list_files_at(
-        self, record_id: str | RecordID, *, draft: bool
+        self, record_id: RecordIDLike, *, draft: bool
     ) -> dict[str, FileEntry]:
         """
         List the files behind one of the two file endpoints
@@ -1644,6 +2039,7 @@ class ZenodoClient:
         :
             The files, keyed by their name on Zenodo
         """
+        record_id = get_record_id(record_id)
         part = "/draft/files" if draft else "/files"
         response = self._request(
             f"/api/records/{record_id}{part}",
@@ -1693,55 +2089,42 @@ class ZenodoClient:
 
         return True
 
-    def is_draft(self, record_id: str | RecordID, *, files_based: bool = True) -> bool:
+    def is_draft(self, record_id: RecordIDLike) -> bool:
         """
-        Is this record an unpublished draft?
+        Is this record unpublished?
 
         Parameters
         ----------
         record_id
-            ID of the record to ask about
-
-        files_based
-            Are we considering this on a files basis?
-
-            If `False`, we are considering this on a metadata basis,
-            which is more complicated, see the notes.
-            There is no default: which basis you mean changes the answer,
-            so it has to be said.
+            ID of the record to ask about, or the record itself
 
         Returns
         -------
         :
-            `True` if the record is an unpublished draft
+            `True` if the record has never been published
 
         Raises
         ------
         RecordNotFoundError
             We could not find the record at all
 
-        NotImplementedError
-            `files_based` is `False`: we don't need
-            and haven't considered this case yet.
-
         Notes
         -----
-        On zenodo, a published record can also have a draft of its own.
-        This is not an unpublished record:
+        On Zenodo, a published record can also have a draft of its own.
+        That does not make it unpublished, and this still answers `False`:
         a published record's *metadata* can be corrected in place,
         by taking a draft of it, changing the metadata and publishing again
-        (keeping the same ID and DOI).
-        However, the *files* of a published record cannot be changed that way,
-        Zenodo locks them when the record is published.
-        So, as far as files are concerned, such a record is simply published,
-        and that is what we report.
-        We never look for a draft of a published record,
-        because finding the published record already answered the question.
-        """
-        if not files_based:
-            msg = f"We haven't figured out the correct behaviour for {files_based=} yet"
-            raise NotImplementedError(msg)
+        (keeping the same ID and DOI),
+        but the record itself is out there either way.
+        Its *files* cannot be changed that way at all —
+        Zenodo locks them when the record is published — which is why
+        the file-writing methods can act on this answer alone.
 
+        "Does it have unpublished metadata edits?" is a different question, and
+        [`has_edited_metadata_draft`][openscm_zenodo.zenodo.ZenodoClient.has_edited_metadata_draft]
+        is the one which answers it.
+        """
+        record_id = get_record_id(record_id)
         description = f"work out whether record {record_id!r} is a draft"
 
         if self._can_see(
@@ -1766,7 +2149,7 @@ class ZenodoClient:
             token_source=self.token_source,
         )
 
-    def list_files(self, record_id: str | RecordID) -> dict[str, FileEntry]:
+    def list_files(self, record_id: RecordIDLike) -> dict[str, FileEntry]:
         """
         List the files on a record
 
@@ -1780,13 +2163,10 @@ class ZenodoClient:
         :
             The record's files, keyed by their name on Zenodo
         """
-        return self._list_files_at(
-            record_id, draft=self.is_draft(record_id, files_based=True)
-        )
+        record_id = get_record_id(record_id)
+        return self._list_files_at(record_id, draft=self.is_draft(record_id))
 
-    def _diff_files(
-        self, record_id: str | RecordID, paths: Collection[Path]
-    ) -> FileDiff:
+    def _diff_files(self, record_id: RecordIDLike, paths: Collection[Path]) -> FileDiff:
         """
         Work out what has to change for a record's files to match `paths`
 
@@ -1806,6 +2186,7 @@ class ZenodoClient:
         :
             The difference between `paths` and the record's files
         """
+        record_id = get_record_id(record_id)
         remote = self._list_files_at(record_id, draft=True)
         # Zenodo has no directories, so a local file's name is its name on Zenodo
         want = {path.name: path for path in paths}
@@ -1831,7 +2212,7 @@ class ZenodoClient:
 
     def _upload_diff(
         self,
-        record_id: str | RecordID,
+        record_id: RecordIDLike,
         diff: FileDiff,
         *,
         n_threads: int,
@@ -1863,6 +2244,7 @@ class ZenodoClient:
         :
             The uploaded files' entries, keyed by their name on Zenodo
         """
+        record_id = get_record_id(record_id)
         if not diff.to_upload:
             return {}
 
@@ -1891,7 +2273,7 @@ class ZenodoClient:
 
     def upload_files(
         self,
-        record_id: str | RecordID,
+        record_id: RecordIDLike,
         paths: Collection[Path],
         *,
         n_threads: int = 4,
@@ -1942,6 +2324,7 @@ class ZenodoClient:
         so checking it against Zenodo's reported checksum afterwards is free.
         Turning that off would remove a safety net and save nothing.
         """
+        record_id = get_record_id(record_id)
         diff = self._diff_files(record_id, paths)
 
         logger.info(
@@ -1961,7 +2344,7 @@ class ZenodoClient:
 
     def mirror_files(
         self,
-        record_id: str | RecordID,
+        record_id: RecordIDLike,
         paths: Collection[Path],
         *,
         n_threads: int = 4,
@@ -2003,6 +2386,7 @@ class ZenodoClient:
         :
             The draft's files once we are done, keyed by their name on Zenodo
         """
+        record_id = get_record_id(record_id)
         diff = self._diff_files(record_id, paths)
 
         logger.info(
@@ -2035,7 +2419,7 @@ class ZenodoClient:
 
     def delete_files(
         self,
-        record_id: str | RecordID,
+        record_id: RecordIDLike,
         filenames: Collection[str],
         *,
         progress: bool = True,
@@ -2063,6 +2447,7 @@ class ZenodoClient:
         progress
             Should a progress bar be shown?
         """
+        record_id = get_record_id(record_id)
         if not filenames:
             return
 
@@ -2076,7 +2461,7 @@ class ZenodoClient:
                 progress_bar.update(1)
 
     def delete_all_files(
-        self, record_id: str | RecordID, *, progress: bool = True
+        self, record_id: RecordIDLike, *, progress: bool = True
     ) -> None:
         """
         Delete every file from a record's draft
@@ -2089,6 +2474,7 @@ class ZenodoClient:
         progress
             Should a progress bar be shown?
         """
+        record_id = get_record_id(record_id)
         self.delete_files(
             record_id,
             tuple(self._list_files_at(record_id, draft=True)),
@@ -2264,7 +2650,7 @@ class ZenodoClient:
 
     def download_file(  # noqa: PLR0913
         self,
-        record_id: str | RecordID,
+        record_id: RecordIDLike,
         filename: str,
         dest: Path,
         *,
@@ -2324,6 +2710,7 @@ class ZenodoClient:
         FileNotOnRecordError
             The record has no file called `filename`
         """
+        record_id = get_record_id(record_id)
         files = self.list_files(record_id)
         if filename not in files:
             raise FileNotOnRecordError(
@@ -2341,7 +2728,7 @@ class ZenodoClient:
 
     def download_files(  # noqa: PLR0913
         self,
-        record_id: str | RecordID,
+        record_id: RecordIDLike,
         dest: Path | Mapping[str, Path],
         *,
         filenames: Collection[str] | None = None,
@@ -2409,6 +2796,7 @@ class ZenodoClient:
             Both `dest` and `filenames` say which files are wanted,
             and they cannot both decide
         """
+        record_id = get_record_id(record_id)
         dest_per_file = None if isinstance(dest, Path) else dict(dest)
 
         if dest_per_file is not None and filenames is not None:
@@ -2472,7 +2860,7 @@ class ZenodoClient:
             progress=progress,
         )
 
-    def get_published(self, record_id: str | RecordID) -> dict[str, Any]:
+    def get_published(self, record_id: RecordIDLike) -> Record:
         """
         Get a published record
 
@@ -2484,7 +2872,7 @@ class ZenodoClient:
         Returns
         -------
         :
-            The record, as Zenodo's native InvenioRDM serialisation reports it
+            The record
 
         Raises
         ------
@@ -2499,11 +2887,12 @@ class ZenodoClient:
         Examples
         --------
         >>> record = ZenodoClient().get_published("4589756")
-        >>> record["metadata"]["title"]
+        >>> record.metadata.title
         'Reduced Complexity Model Intercomparison Project (RCMIP) protocol'
-        >>> record["pids"]["doi"]["identifier"]
+        >>> record.doi
         '10.5281/zenodo.4589756'
         """
+        record_id = get_record_id(record_id)
         logger.info(f"Retrieving published record {record_id!r}")
 
         response = self._request(
@@ -2512,40 +2901,268 @@ class ZenodoClient:
             description=f"get published record {record_id!r}",
         )
 
-        return cast(dict[str, Any], response.json())
+        return Record.from_json(response.json())
 
-    def get_draft(self, record_id: str | RecordID) -> dict[str, Any]:
+    def _get_draft_document(self, record_id: str | RecordID) -> Record:
         """
-        Get a record's draft
+        Get whatever Zenodo serves from a record's draft endpoint
+
+        The endpoint serves two different things — an unpublished record, and a
+        published record's draft metadata edits — and callers care which. This
+        is the shared request; processing the returned record
+        is the caller's job.
 
         Parameters
         ----------
         record_id
-            ID of the record whose draft to get
+            ID of the record whose draft endpoint to read
 
         Returns
         -------
         :
-            The draft, as Zenodo's native InvenioRDM serialisation reports it
+            Whatever was there
 
         Raises
         ------
         ZenodoHTTPError
-            The record has no draft (a `404`),
-            or we may not see it.
+            There was nothing there (a `404`), or we may not see it
         """
-        logger.info(f"Retrieving the draft of record {record_id!r}")
-
         response = self._request(
             f"/api/records/{record_id}/draft",
             requires_auth=True,
             headers={"Accept": INVENIORDM_JSON_ACCEPT},
-            description=f"get the draft of record {record_id!r}",
+            description=f"hit the draft endpoint of record {record_id!r}",
         )
 
-        return cast(dict[str, Any], response.json())
+        return Record.from_json(response.json())
 
-    def get_record(self, record_id: str | RecordID) -> dict[str, Any]:
+    def get_draft(self, record_id: RecordIDLike) -> Record:
+        """
+        Get an unpublished record
+
+        A record which has never been published *is* a draft, and this is how to
+        read it. **A published record never comes back from here**, whatever
+        state it is in: the draft metadata edits a published record can have are
+        a different thing, and
+        [`get_edited_metadata_draft`][openscm_zenodo.zenodo.ZenodoClient.get_edited_metadata_draft]
+        is what reads those. Zenodo serves both from one endpoint, which is
+        exactly why this method does not.
+
+        Parameters
+        ----------
+        record_id
+            ID of the record to get, or the record itself
+
+        Returns
+        -------
+        :
+            The draft
+
+        Raises
+        ------
+        PublishedRecordDraftError
+            The record is published, so it is not a draft
+
+        RecordNotFoundError
+            There is no record with this ID at all
+
+        ZenodoHTTPError
+            Anything else, e.g. we may not see this record
+        """
+        record_id = get_record_id(record_id)
+        logger.info(f"Retrieving draft record {record_id!r}")
+
+        try:
+            draft = self._get_draft_document(record_id)
+
+        except ZenodoHTTPError as exc:
+            if exc.response.status_code != HTTP_NOT_FOUND:
+                raise
+
+            if self._published_record_exists(record_id):
+                raise PublishedRecordDraftError(
+                    str(record_id), zenodo_domain=self.zenodo_domain_url
+                ) from exc
+
+            raise RecordNotFoundError(
+                str(record_id),
+                zenodo_domain=self.zenodo_domain_url,
+                token_source=self.token_source,
+            ) from exc
+
+        if draft.is_edited_metadata_draft:
+            # The endpoint answered, but with the other thing it serves.
+            raise PublishedRecordDraftError(
+                str(record_id), zenodo_domain=self.zenodo_domain_url
+            )
+
+        return draft
+
+    def get_edited_metadata_draft(self, record_id: RecordIDLike) -> Record:
+        """
+        Read a published record's unpublished metadata edits
+
+        This only reads. Use
+        [`create_or_get_edited_metadata_draft`][openscm_zenodo.zenodo.ZenodoClient.create_or_get_edited_metadata_draft]
+        to start editing, which is a deliberate act and so is not something this
+        does as a side effect of being asked to look.
+
+        Parameters
+        ----------
+        record_id
+            ID of the published record to read, or the record itself
+
+        Returns
+        -------
+        :
+            The draft metadata edits
+
+        Raises
+        ------
+        DraftRecordDraftMetadataEditsError
+            The record has never been published, so it *is* a draft and does not
+            have a separate draft of its metadata
+
+        DraftMetadataEditsNotFoundError
+            The record is published but nobody has started editing its metadata
+
+        RecordNotFoundError
+            There is no record with this ID at all
+        """
+        record_id = get_record_id(record_id)
+        if self.is_draft(record_id):
+            raise DraftRecordDraftMetadataEditsError(
+                str(record_id), zenodo_domain=self.zenodo_domain_url
+            )
+
+        logger.info(f"Retrieving the metadata edits on record {record_id!r}")
+
+        try:
+            return self._get_draft_document(record_id)
+
+        except ZenodoHTTPError as exc:
+            if exc.response.status_code != HTTP_NOT_FOUND:
+                raise
+
+            raise self._explain_missing_draft(record_id) from exc
+
+    def create_or_get_edited_metadata_draft(self, record_id: RecordIDLike) -> Record:
+        """
+        Start editing a published record's metadata, or get the edits already going
+
+        This is how a published record's metadata is corrected in place: the
+        draft keeps the record's ID and DOI, so editing it and publishing it
+        again changes what the public record says without releasing a new
+        version. **Starting the edits is the opt-in to that**, which is why
+        [`update_metadata`][openscm_zenodo.zenodo.ZenodoClient.update_metadata]
+        refuses a published record which does not already have them under way.
+
+        A published record's *files* cannot be changed this way, whatever the
+        draft says: Zenodo locks them at publication, and
+        [`create_or_get_new_version`][openscm_zenodo.zenodo.ZenodoClient.create_or_get_new_version]
+        is the way to change those.
+
+        This is create-or-get, as the name says, so it is safe to call
+        repeatedly: Zenodo returns the draft which already exists rather than
+        making a second one.
+
+        Parameters
+        ----------
+        record_id
+            ID of the published record to edit, or the record itself
+
+        Returns
+        -------
+        :
+            The draft.
+
+            Its `record_id` is the one which was asked for — an edited metadata
+            draft keeps the record's ID — and its `is_edited_metadata_draft` is
+            `True`.
+
+        Raises
+        ------
+        RecordNotPublishedError
+            The record has never been published, so it *is* a draft
+            and there is nothing separate to edit
+
+        RecordNotFoundError
+            There is no record with this ID at all
+
+        ZenodoHTTPError
+            Anything else, e.g. we may not edit this record
+        """
+        record_id = get_record_id(record_id)
+        if self.is_draft(record_id):
+            raise DraftRecordDraftMetadataEditsError(
+                str(record_id), zenodo_domain=self.zenodo_domain_url
+            )
+
+        logger.info(f"Getting (or starting) metadata edits on record {record_id!r}")
+
+        response = self._request(
+            f"/api/records/{record_id}/draft",
+            method="POST",
+            requires_auth=True,
+            headers={"Accept": INVENIORDM_JSON_ACCEPT},
+            description=f"start metadata edits on record {record_id!r}",
+        )
+
+        return Record.from_json(response.json())
+
+    def has_edited_metadata_draft(self, record_id: RecordIDLike) -> bool:
+        """
+        Find out whether this published record has unpublished metadata edits
+
+        This is the second of two questions.
+        [`is_draft`][openscm_zenodo.zenodo.ZenodoClient.is_draft] answers
+        "has this record never been published?"; this one answers "are there
+        edits waiting to go out?", and only a published record can have those.
+
+        Parameters
+        ----------
+        record_id
+            ID of the published record to ask about, or the record itself
+
+        Returns
+        -------
+        :
+            `True` if the record has an edited metadata draft
+
+        Raises
+        ------
+        RecordNotPublishedError
+            The record has never been published, so it *is* a draft
+            and the question does not apply to it
+
+        MissingTokenError
+            We have no token.
+
+            Drafts are not visible without one,
+            so without a token there is no answer to give.
+
+        Notes
+        -----
+        This costs a request of its own, and it has to.
+        `GET /api/records/{id}` reports `is_draft` as `False` for a published
+        record whether or not one of these drafts exists, so the answer cannot
+        be read off a record we already have.
+        """
+        record_id = get_record_id(record_id)
+        if self.is_draft(record_id):
+            raise DraftRecordDraftMetadataEditsError(
+                str(record_id), zenodo_domain=self.zenodo_domain_url
+            )
+
+        return self._can_see(
+            f"/api/records/{record_id}/draft",
+            requires_auth=True,
+            description=(
+                f"work out whether record {record_id!r} has unpublished metadata edits"
+            ),
+        )
+
+    def get_record(self, record_id: RecordIDLike) -> Record:
         """
         Get a record, whether it is published or still a draft
 
@@ -2553,25 +3170,22 @@ class ZenodoClient:
         If you do, [`get_published`][openscm_zenodo.zenodo.ZenodoClient.get_published]
         and [`get_draft`][openscm_zenodo.zenodo.ZenodoClient.get_draft]
         each hit one endpoint and say so at the call site.
-        The record we return tells you which you got:
-        `is_draft` and `is_published` are both fields on it.
+        The record we return tells you which you got, through its `is_draft`.
 
         The published record wins if there is one.
-        A published record can also have a draft of its own,
-        holding metadata changes which have not been published yet;
-        this returns the published record in that case, not the pending one.
-        Which of the two a read should return is
-        still an open question (Part 13.3 of the rewrite).
+        A published record can also have unpublished metadata edits;
+        to read those, use
+        [`create_or_get_edited_metadata_draft`][openscm_zenodo.zenodo.ZenodoClient.create_or_get_edited_metadata_draft].
 
         Parameters
         ----------
         record_id
-            ID of the record to get
+            ID of the record to get, or the record itself
 
         Returns
         -------
         :
-            The record or its draft, in Zenodo's native InvenioRDM serialisation
+            The record
 
         Raises
         ------
@@ -2591,9 +3205,10 @@ class ZenodoClient:
         Examples
         --------
         >>> record = ZenodoClient().get_record("4589756")
-        >>> record["is_published"], record["is_draft"]
-        (True, False)
+        >>> record.is_draft
+        False
         """
+        record_id = get_record_id(record_id)
         for getter, needs_token in (
             (self.get_published, False),
             (self.get_draft, True),
@@ -2615,7 +3230,7 @@ class ZenodoClient:
             token_source=self.token_source,
         )
 
-    def get_metadata(self, record_id: str | RecordID) -> dict[str, Any]:
+    def get_metadata(self, record_id: RecordIDLike) -> Metadata:
         """
         Get a record's metadata
 
@@ -2623,63 +3238,48 @@ class ZenodoClient:
         because it goes through
         [`get_record`][openscm_zenodo.zenodo.ZenodoClient.get_record].
 
-        A published record can also have a draft of its own,
-        holding metadata changes which have not been published yet.
+        A published record can also have unpublished metadata edits.
         **We return the published metadata in that case**, not the pending
         changes, because the published record is what `get_record` returns.
-        Whether that is the right answer is still an open question
-        (Part 13.3 of the rewrite), and it is settled in Part 6.
-        Until then, [`get_draft`][openscm_zenodo.zenodo.ZenodoClient.get_draft]
+        [`create_or_get_edited_metadata_draft`][openscm_zenodo.zenodo.ZenodoClient.create_or_get_edited_metadata_draft]
         is how to see the pending changes.
 
         Parameters
         ----------
         record_id
-            ID of the record whose metadata to get
+            ID of the record whose metadata to get, or the record itself
 
         Returns
         -------
         :
-            The contents of the record's `metadata` key.
-
-            This is the same shape
-            [`update_metadata`][openscm_zenodo.zenodo.ZenodoClient.update_metadata]
-            takes, so metadata can be read from one record
-            and applied to another without unwrapping anything.
+            The record's metadata.
 
         Raises
         ------
         RecordNotFoundError
             We could not find the record at all
 
-        Notes
-        -----
-        The InvenioRDM metadata schema is a breaking change
-        from the schema the legacy API used, and is Part 6 of the rewrite.
-        This method hands back what Zenodo sends;
-        translating and validating it, and stripping the keys
-        which Zenodo rather than you controls, is still to come.
-
         Examples
         --------
         >>> metadata = ZenodoClient().get_metadata("4589756")
-        >>> metadata["title"]
+        >>> metadata.title
         'Reduced Complexity Model Intercomparison Project (RCMIP) protocol'
-        >>> metadata["rights"][0]["id"]
+        >>> metadata.rights[0].id
         'cc-by-sa-4.0'
+        >>> metadata.creators[0].name
+        'Zebedee Nicholls'
         """
+        record_id = get_record_id(record_id)
         logger.info(f"Retrieving the metadata of record {record_id!r}")
 
-        return cast(dict[str, Any], self.get_record(record_id)["metadata"])
+        return self.get_record(record_id).metadata
 
-    def get_parent_id(self, record_id: str | RecordID) -> ParentID:
+    def get_parent_id(self, record_id: RecordIDLike) -> ParentID:
         """
         Get the ID which refers to all versions of a record
 
         Zenodo calls this the record's parent.
-        Resolving it gives whichever version is the latest at the time,
-        which is what you want in a citation or a link
-        that should not go stale.
+        Resolving it gives whichever version is the latest at the time.
 
         Parameters
         ----------
@@ -2701,9 +3301,8 @@ class ZenodoClient:
         >>> ZenodoClient().get_parent_id("4589756")
         '4589726'
         """
-        parent_id = ParentID(str(self.get_record(record_id)["parent"]["id"]))
-
-        return parent_id
+        record_id = get_record_id(record_id)
+        return self.get_record(record_id).parent_id
 
     def _get_citation_params(
         self,
@@ -2749,10 +3348,12 @@ class ZenodoClient:
                 name for name, (given, default) in asked_for.items() if given != default
             ]
             if supplied:
-                logger.warning(
+                warn_zenodo(
                     f"Ignoring {' and '.join(supplied)}: "
                     f"they only apply to {CitationFormat.citation.value!r}, "
-                    f"not {fmt.value!r}"
+                    f"not {fmt.value!r}",
+                    # `get_citation` -> `_get_citation_params` -> here
+                    stacklevel=4,
                 )
 
             return None
@@ -2765,19 +3366,21 @@ class ZenodoClient:
             )
 
         if warn_unknown_style and style not in KNOWN_CITATION_STYLES:
-            logger.warning(
+            warn_zenodo(
                 f"We have not checked the citation style {style!r}. "
                 "Zenodo accepts more CSL styles than we know about, "
                 "so we are sending it anyway. "
                 "If Zenodo does not know it either, "
-                "the request comes back as a 400."
+                "the request comes back as a 400.",
+                # `get_citation` -> `_get_citation_params` -> here
+                stacklevel=4,
             )
 
         return {"style": style, "locale": locale}
 
     def get_citation(
         self,
-        record_id: str | RecordID,
+        record_id: RecordIDLike,
         *,
         fmt: CitationFormat = CitationFormat.bibtex,
         style: str = CITATION_STYLE_DEFAULT,
@@ -2844,6 +3447,7 @@ class ZenodoClient:
         Intercomparison Project (RCMIP) protocol (Version v5.1.0) [Dataset].
         Zenodo. https://doi.org/10.5281/zenodo.4589756
         """
+        record_id = get_record_id(record_id)
         logger.info(f"Retrieving the {fmt.value} citation of record {record_id!r}")
 
         response = self._request(
@@ -2860,7 +3464,7 @@ class ZenodoClient:
 
         return response.text
 
-    def get_latest_version_id(self, record_id: str | RecordID) -> RecordID:
+    def get_latest_version_id(self, record_id: RecordIDLike) -> RecordID:
         """
         Get the ID of the latest version of a record
 
@@ -2874,6 +3478,7 @@ class ZenodoClient:
         :
             ID of the latest version
         """
+        record_id = get_record_id(record_id)
         record = self._request(
             f"/api/records/{record_id}",
             description=f"get record {record_id!r}",
@@ -2886,18 +3491,18 @@ class ZenodoClient:
 
         return RecordID(str(latest["id"]))
 
-    def new_version(
-        self, record_id: str | RecordID, *, import_files: bool = False
+    def create_or_get_new_version(
+        self, record_id: RecordIDLike, *, import_files: bool = False
     ) -> RecordID:
         """
-        Create a new version of a published record
+        Create a new version of a published record, or get the one already going
 
         The new version is a draft with **no files**.
         Pass `import_files=True`, or call
         [`import_files`][openscm_zenodo.zenodo.ZenodoClient.import_files],
         to carry the previous version's files over.
 
-        This is get-or-create.
+        This is create-or-get, which the name is meant to make plain.
         A record can have at most one unpublished next version,
         so calling this again returns the draft that already exists
         rather than creating a second one.
@@ -2910,7 +3515,7 @@ class ZenodoClient:
         Parameters
         ----------
         record_id
-            ID of any published version of the record
+            ID of any published version of the record, or the record itself
 
         import_files
             Should the previous version's files be carried over?
@@ -2920,6 +3525,7 @@ class ZenodoClient:
         :
             ID of the new version
         """
+        record_id = get_record_id(record_id)
         logger.info(f"Creating a new version of record {record_id!r}")
 
         response = self._request(
@@ -2937,7 +3543,7 @@ class ZenodoClient:
 
         return new_version_id
 
-    def import_files(self, record_id: str | RecordID) -> bool:
+    def import_files(self, record_id: RecordIDLike) -> bool:
         """
         Carry the previous version's files over to a record's draft
 
@@ -2961,6 +3567,7 @@ class ZenodoClient:
             Skipping rather than failing is what makes a release script
             safe to re-run after it has failed part way through.
         """
+        record_id = get_record_id(record_id)
         already_there = self._list_files_at(record_id, draft=True)
         if already_there:
             logger.info(
@@ -2981,69 +3588,259 @@ class ZenodoClient:
         return True
 
     def update_metadata(
-        self, record_id: str | RecordID, metadata: dict[str, Any]
-    ) -> dict[str, Any]:
+        self,
+        record_id: RecordIDLike,
+        metadata: Metadata,
+        *,
+        warn_unknown_vocabulary: bool = True,
+        warn_discarded: bool = True,
+        validate: bool = False,
+    ) -> Record:
         """
-        Update the metadata of a record's draft
+        Update the metadata of a record
+
+        This is either editing a draft's metadata, or editing the pending
+        changes to a published record's metadata. For a published record, the
+        edits have to be started first, with
+        [`create_or_get_edited_metadata_draft`][openscm_zenodo.zenodo.ZenodoClient.create_or_get_edited_metadata_draft];
+        we do not do that on your behalf, because publishing those edits changes
+        what a public record says under the same ID and DOI.
+        [`create_or_get_new_version`][openscm_zenodo.zenodo.ZenodoClient.create_or_get_new_version]
+        is how to release the change as a new version instead.
 
         Parameters
         ----------
         record_id
-            ID of the record whose draft to update
+            ID of the record whose draft to update, or the record itself
 
         metadata
             Metadata to apply.
 
-            This is the contents of the draft's `metadata` key,
-            not the whole draft.
-            Settings which live outside `metadata`, such as `access`,
-            are left as they are.
+            Build it with [`Metadata`][openscm_zenodo.metadata.Metadata], or
+            load it from a file with
+            [`Metadata.from_file`][openscm_zenodo.metadata.Metadata.from_file].
+
+            This is the draft's metadata, not the whole draft, and it replaces
+            what is there rather than being merged into it.
+            Settings which live outside the metadata, such as `access`,
+            are left alone. Writing *those* is not supported yet; it lands with
+            `create_record`, which has to set them at creation anyway.
+
+        warn_unknown_vocabulary
+            Should we warn about vocabulary values we do not recognise?
+
+            Zenodo's vocabularies are longer than ours and they change,
+            so this is a warning rather than a refusal —
+            and this flag is here for when you know better than we do.
+            See
+            [`find_unknown_vocabulary_values`][openscm_zenodo.metadata.Metadata.find_unknown_vocabulary_values].
+
+        warn_discarded
+            Should we warn about fields Zenodo silently discarded?
+
+            Zenodo does not refuse a value it cannot parse, it drops it: a
+            malformed `publication_date` or an over-long `version` comes back
+            as `null` with a `200`. We compare what came back against what we
+            sent and say so, because otherwise the field simply goes missing.
+
+        validate
+            Should we check the metadata is complete before sending it?
+
+            Off by default: Zenodo accepts an incomplete draft, and filling one
+            in over several calls is a normal thing to do.
+            [`publish`][openscm_zenodo.zenodo.ZenodoClient.publish]
+            is where completeness has to be right, and it checks by default.
 
         Returns
         -------
         :
-            The updated draft, as Zenodo reports it
+            The updated draft
 
-        Notes
-        -----
-        The InvenioRDM metadata schema is a breaking change
-        from the schema the legacy API used, and is Part 6 of the rewrite.
-        This method passes `metadata` through as it is given;
-        translating and validating it is still to come.
+        Raises
+        ------
+        RecordNotWritableError
+            The record is published and not metadata edits have been started
+
+        RecordNotFoundError
+            There is no record with this ID
+
+        MetadataValidationError
+            `validate` is on and the metadata is not complete
         """
-        logger.info(f"Updating the metadata of record {record_id!r}")
-        logger.debug(f"New metadata: {metadata}")
+        record_id = get_record_id(record_id)
 
-        response = self._request(
-            f"/api/records/{record_id}/draft",
-            method="PUT",
-            requires_auth=True,
-            json={"metadata": metadata},
-            description=f"update the metadata of record {record_id!r}",
+        if validate:
+            metadata.validate(description=f"update record {record_id!r}")
+
+        if warn_unknown_vocabulary:
+            unknown = metadata.find_unknown_vocabulary_values()
+            if unknown:
+                warn_zenodo(
+                    # The prose goes first and the reports last: each one ends
+                    # with a vocabulary in full, so anything after them is a
+                    # long way down the message.
+                    "Some of this metadata uses vocabulary values we do not "
+                    "know of. Zenodo's vocabularies are longer than the lists "
+                    "we keep and they change, so this may well be fine; pass "
+                    "`warn_unknown_vocabulary=False` to silence this.\n"
+                    + "\n".join(f"- {value}" for value in unknown)
+                )
+
+        logger.info(f"Updating the metadata of record {record_id!r}")
+        metadata_json = metadata.to_json()
+        logger.debug(f"New metadata: {metadata_json}")
+
+        try:
+            response = self._request(
+                f"/api/records/{record_id}/draft",
+                method="PUT",
+                requires_auth=True,
+                headers={"Accept": INVENIORDM_JSON_ACCEPT},
+                json={"metadata": metadata_json},
+                description=f"update the metadata of record {record_id!r}",
+            )
+
+        except ZenodoHTTPError as exc:
+            if exc.response.status_code != HTTP_NOT_FOUND:
+                raise
+
+            if self._published_record_exists(record_id):
+                raise RecordNotWritableError(
+                    str(record_id),
+                    zenodo_domain=self.zenodo_domain_url,
+                    what="metadata",
+                ) from exc
+
+            raise RecordNotFoundError(
+                str(record_id),
+                zenodo_domain=self.zenodo_domain_url,
+                token_source=self.token_source,
+            ) from exc
+
+        updated = Record.from_json(response.json())
+
+        if warn_discarded:
+            # Warned about here rather than in a helper, so that the warning
+            # points at whoever called us rather than at a line of ours.
+            discarded = find_discarded_metadata(
+                sent=metadata_json, got=updated.metadata
+            )
+            if discarded:
+                warn_zenodo(
+                    f"Zenodo discarded "
+                    f"{', '.join(repr(key) for key in discarded)} "
+                    f"from the metadata of record {record_id!r}. "
+                    "It accepts values it cannot parse and then stores nothing, "
+                    "so the usual cause is a value it could not read "
+                    "(a `publication_date` which is not a date, "
+                    "a `version` longer than about 190 characters). "
+                    "Pass `warn_discarded=False` to silence this."
+                )
+
+        return updated
+
+    def _published_record_exists(self, record_id: str | RecordID) -> bool:
+        """
+        Is there a published record with this ID?
+
+        Used on error paths, to tell "this record is published"
+        apart from "there is no such record".
+
+        Parameters
+        ----------
+        record_id
+            ID of the record to look for
+
+        Returns
+        -------
+        :
+            `True` if there is one
+        """
+        return self._can_see(
+            f"/api/records/{record_id}",
+            requires_auth=False,
+            description=f"work out if a published record {record_id!r} exists",
         )
 
-        return cast(dict[str, Any], response.json())
+    def _explain_missing_draft(self, record_id: str | RecordID) -> ZenodoError:
+        """
+        Work out why there was no draft to read, and build the error to raise
 
-    def publish(self, record_id: str | RecordID) -> RecordID:
+        A `404` from the draft endpoint has two causes which need different
+        answers: the record is published and its metadata edits were never
+        started, or there is no such record at all.
+
+        Parameters
+        ----------
+        record_id
+            ID of the record whose draft we wanted
+
+        Returns
+        -------
+        :
+            The error to raise
+        """
+        if self._published_record_exists(record_id):
+            return DraftMetadataEditsNotFoundError(
+                str(record_id), zenodo_domain=self.zenodo_domain_url
+            )
+
+        return RecordNotFoundError(
+            str(record_id),
+            zenodo_domain=self.zenodo_domain_url,
+            token_source=self.token_source,
+        )
+
+    def publish(self, record_id: RecordIDLike, *, validate: bool = True) -> RecordID:
         """
         Publish a record's draft
 
         **This cannot be undone.**
         A published record cannot be deleted,
         and its files can no longer be changed;
-        changing anything after this means creating a new version, see
-        [`new_version`][openscm_zenodo.zenodo.ZenodoClient.new_version].
+        changing files after this means creating a new version, see
+        [`create_or_get_new_version`][openscm_zenodo.zenodo.ZenodoClient.create_or_get_new_version].
+        Changing metadata after this is possible, see
+        [`create_or_get_edited_metadata_draft`][openscm_zenodo.zenodo.ZenodoClient.create_or_get_edited_metadata_draft]
+        and [`update_metadata`][openscm_zenodo.zenodo.ZenodoClient.update_metadata].
 
         Parameters
         ----------
         record_id
-            ID of the record whose draft to publish
+            ID of the record whose draft to publish, or the record itself
+
+        validate
+            Should we check the draft's metadata before publishing it?
+
+            Zenodo only validates metadata at publish time, so this is the last
+            point at which a missing field can be caught, and it is the reason
+            this defaults to `True`. It costs one extra request, and it reports
+            every problem at once rather than the first one Zenodo trips over.
+
+            Turn it off if you would rather let Zenodo have the last word,
+            for instance if it accepts something we think it should not.
 
         Returns
         -------
         :
             ID of the published record
+
+        Raises
+        ------
+        MetadataValidationError
+            `validate` is on and the draft's metadata is not complete enough
+            for Zenodo to publish it
         """
+        record_id = get_record_id(record_id)
+
+        if validate:
+            # Both an unpublished record and a published record's metadata edits
+            # get published from here, so this reads the endpoint directly
+            # rather than through either of the methods which insist on one.
+            self._get_draft_document(record_id).metadata.validate(
+                description=f"publish record {record_id!r}"
+            )
+
         logger.info(f"Publishing record {record_id!r}")
 
         response = self._request(
@@ -3107,8 +3904,9 @@ class ZenodoInteractor:
           It is not possible to use the global id that references all the versions.
 
         We replicate this logic here.
-        To create a new version from the all records ID that references all versions,
-        use [`create_new_version`][openscm_zenodo.zenodo.create_new_version].
+        To create a new version from the all records ID that references all
+        versions, use
+        [`create_or_get_new_version`][openscm_zenodo.zenodo.create_or_get_new_version].
         """
         logger.info(f"Creating a new version from {latest_deposition_id=!r}")
 
@@ -3868,9 +4666,9 @@ class ZenodoInteractor:
 
 
 def retrieve_metadata(
-    record_id: str | RecordID,
+    record_id: RecordIDLike,
     client: ZenodoClient | None = None,
-) -> dict[str, Any]:
+) -> Metadata:
     """
     Retrieve a record's metadata, in one call
 
@@ -3889,13 +4687,13 @@ def retrieve_metadata(
     Returns
     -------
     :
-        The contents of the record's `metadata` key, see
+        The record's metadata, see
         [`get_metadata`][openscm_zenodo.zenodo.ZenodoClient.get_metadata]
 
     Examples
     --------
     >>> metadata = retrieve_metadata("4589756")
-    >>> metadata["version"]
+    >>> metadata.version
     'v5.1.0'
     """
     if client is None:
@@ -3905,7 +4703,7 @@ def retrieve_metadata(
 
 
 def retrieve_citation(  # noqa: PLR0913
-    record_id: str | RecordID,
+    record_id: RecordIDLike,
     client: ZenodoClient | None = None,
     *,
     fmt: CitationFormat = CitationFormat.bibtex,
@@ -4124,7 +4922,7 @@ def retrieve_bibtex_entry(
 
 
 def download_files(  # noqa: PLR0913
-    record_id: str | RecordID,
+    record_id: RecordIDLike,
     dest: Path | Mapping[str, Path],
     client: ZenodoClient | None = None,
     *,
@@ -4193,11 +4991,11 @@ def download_files(  # noqa: PLR0913
     )
 
 
-def create_new_version(  # noqa: PLR0913
-    record_id: str | RecordID,
+def create_or_get_new_version(  # noqa: PLR0913
+    record_id: RecordIDLike,
     client: ZenodoClient | None = None,
     *,
-    metadata: dict[str, Any] | None = None,
+    metadata: Metadata | None = None,
     files: Collection[Path] | None = None,
     files_mode: FilesMode = FilesMode.start_fresh,
     publish: bool = False,
@@ -4282,7 +5080,7 @@ def create_new_version(  # noqa: PLR0913
     if client is None:
         client = ZenodoClient()
 
-    new_version_id = client.new_version(record_id)
+    new_version_id = client.create_or_get_new_version(record_id)
 
     if metadata is not None:
         client.update_metadata(new_version_id, metadata)
@@ -4324,7 +5122,9 @@ def create_new_version_legacy(  # noqa: PLR0913
     This is the pre-InvenioRDM implementation.
     It is kept only so that the command-line interface keeps working
     while the rewrite lands, and goes when the CLI is trimmed (Part 8).
-    Use [`create_new_version`][openscm_zenodo.zenodo.create_new_version] instead.
+    Use
+    [`create_or_get_new_version`][openscm_zenodo.zenodo.create_or_get_new_version]
+    instead.
 
     This starts from the ID of any deposition in the record/series.
 
