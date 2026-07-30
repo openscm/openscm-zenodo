@@ -165,6 +165,9 @@ addopts = [
 doctest_optionflags = [
     "NORMALIZE_WHITESPACE",  # treat whitespace sanely
 ]
+markers = [
+    "zenodo_token: test requires ZENODO_TOKEN environment variable to be set",
+]
 
 [tool.ruff]
 src = [

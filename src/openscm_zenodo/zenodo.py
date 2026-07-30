@@ -2886,7 +2886,7 @@ class ZenodoClient:
 
         Examples
         --------
-        >>> record = ZenodoClient().get_published("4589756")
+        >>> record = ZenodoClient().get_published("4589756")  # doctest: +ZENODO_API
         >>> record.metadata.title
         'Reduced Complexity Model Intercomparison Project (RCMIP) protocol'
         >>> record.doi
@@ -3204,7 +3204,7 @@ class ZenodoClient:
 
         Examples
         --------
-        >>> record = ZenodoClient().get_record("4589756")
+        >>> record = ZenodoClient().get_record("4589756")  # doctest: +ZENODO_API
         >>> record.is_draft
         False
         """
@@ -3261,7 +3261,7 @@ class ZenodoClient:
 
         Examples
         --------
-        >>> metadata = ZenodoClient().get_metadata("4589756")
+        >>> metadata = ZenodoClient().get_metadata("4589756")  # doctest: +ZENODO_API
         >>> metadata.title
         'Reduced Complexity Model Intercomparison Project (RCMIP) protocol'
         >>> metadata.rights[0].id
@@ -3298,7 +3298,7 @@ class ZenodoClient:
 
         Examples
         --------
-        >>> ZenodoClient().get_parent_id("4589756")
+        >>> ZenodoClient().get_parent_id("4589756")  # doctest: +ZENODO_API
         '4589726'
         """
         record_id = get_record_id(record_id)
@@ -3435,7 +3435,7 @@ class ZenodoClient:
         Examples
         --------
         >>> client = ZenodoClient()
-        >>> bibtex = client.get_citation("4589756")
+        >>> bibtex = client.get_citation("4589756")  # doctest: +ZENODO_API
         >>> print(bibtex.splitlines()[0])
         @dataset{zebedee_nicholls_2021_4589756,
 
@@ -4692,7 +4692,7 @@ def retrieve_metadata(
 
     Examples
     --------
-    >>> metadata = retrieve_metadata("4589756")
+    >>> metadata = retrieve_metadata("4589756")  # doctest: +ZENODO_API
     >>> metadata.version
     'v5.1.0'
     """
@@ -4748,7 +4748,7 @@ def retrieve_citation(  # noqa: PLR0913
 
     Examples
     --------
-    >>> res = retrieve_citation("4589756")
+    >>> res = retrieve_citation("4589756")  # doctest: +ZENODO_API
     >>> # There are trailing newlines in the Zenodo response.
     >>> # We strip them here
     >>> res_disp = "\n".join([v.rstrip() for v in res.splitlines()])
@@ -4810,7 +4810,7 @@ def retrieve_metadata_legacy(
     Examples
     --------
     >>> import json
-    >>> res_raw = retrieve_metadata_legacy("4589756")
+    >>> res_raw = retrieve_metadata_legacy("4589756")  # doctest: +ZENODO_API
     >>> res_json = json.dumps(res_raw, indent=2, sort_keys=True)
     >>> print(res_json)
     {
@@ -4896,7 +4896,7 @@ def retrieve_bibtex_entry(
 
     Examples
     --------
-    >>> res = retrieve_bibtex_entry("4589756")
+    >>> res = retrieve_bibtex_entry("4589756")  # doctest: +ZENODO_API
     >>> # There are trailing newlines in the Zenodo response.
     >>> # We strip them here
     >>> res_disp = "\n".join([v.rstrip() for v in res.splitlines()])
