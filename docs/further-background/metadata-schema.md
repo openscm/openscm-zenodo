@@ -74,10 +74,10 @@ rather than inside it. The same goes for DOIs, which live in `pids`.
 | `related_identifiers: [{..., "relation": "isSupplementTo"}]` | `relation_type: {"id": "issupplementto"}` | `RelatedIdentifier(..., relation_type="issupplementto")` |
 | `grants: [{"id": "10.13039/501100000780::101003536"}]` | `funding: [{"funder": {...}, "award": {...}}]` | `Funding(funder=Funder(id=...), award=Award(id=...))` |
 | `notes` | an entry in `additional_descriptions` | `Metadata.raw["additional_descriptions"]` |
-| `access_right`, `embargo_date` | the record's `access` object | `Record.access` (read-only for now, see below) |
-| `prereserve_doi`, `doi` | the record's `pids` | `Record.doi`, and `reserve_doi` to reserve one |
+| `access_right`, `embargo_date` | the record's `access` object | `Record.access`, and `update_access` to set it, see below |
+| `prereserve_doi`, `doi` | the record's `pids` | `Record.doi`, and `reserve_or_get_doi` to reserve one |
 | `journal_title`, `imprint_*`, `conference_*`, `thesis_*` | the record's `custom_fields` | `Record.raw["custom_fields"]` |
-| `communities` | the record's `parent.communities` | `Record.raw["parent"]["communities"]` |
+| `communities` | the record's `parent.communities` | read-only: `Record.raw["parent"]["communities"]`. **Setting a record's communities is not supported**, see below |
 
 You do not have to remember this table:
 passing any of the left-hand keys raises
@@ -114,6 +114,15 @@ Metadata can also be loaded from a JSON file with
 Methods which take metadata take a `Metadata` and nothing else, so a file or a
 JSON blob is converted once, where the error can name the file, rather than at
 every call site.
+
+[`update_metadata`][openscm_zenodo.zenodo.ZenodoClient.update_metadata] is the
+only thing which sets metadata, including on a record which has just been
+created:
+
+```python
+record = client.create_record()  # takes no arguments
+client.update_metadata(record, metadata)
+```
 
 ### Zenodo discards what it cannot read, rather than refusing it
 
@@ -219,10 +228,48 @@ and they are not the same thing:
   [`DraftMetadataEditsNotFoundError`][openscm_zenodo.exceptions.DraftMetadataEditsNotFoundError],
   and says how to start some.
 
-## What is not here yet
+## The parts of a record which are not `metadata`
 
-Writing the parts of a record which live *outside* `metadata` — `access` and
-its embargo, `custom_fields`, `files.enabled` — is not supported. Those land
-with `create_record`, which has to set a record's access at creation anyway.
-They can all be read: `Record.access` is an
-[`Access`][openscm_zenodo.zenodo.Access], and the rest is in `Record.raw`.
+`access` is written with
+[`update_access`][openscm_zenodo.zenodo.ZenodoClient.update_access], while the
+record is still unpublished.
+
+Zenodo's model is that **records** are public and only an admin can change that,
+while **files** are yours to control:
+
+- `access.record="restricted"` is refused
+  (`400 You don't have permissions to manage record access.`) — on a record the
+  account created seconds earlier, so it is about the field rather than
+  ownership. We send it anyway rather than blocking it here, since the refusal
+  is Zenodo's to make and its rules may change, and translate the refusal into
+  [`AccessNotPermittedError`][openscm_zenodo.exceptions.AccessNotPermittedError].
+  To keep files private, use `access.files="restricted"` and
+  [`Embargo`][openscm_zenodo.zenodo.Embargo], which do work.
+- `files.enabled=false` (a metadata-only record) is refused *quietly*: the
+  request succeeds, files stay enabled, and the refusal appears only in an
+  `errors` array in the response. `update_access` warns about anything in there
+  which names a field it sent, which is why we offer no parameter for this one.
+
+### Communities are deliberately not supported
+
+**This package cannot put a record in a community, and will not.** On the legacy
+API `communities` was a metadata field, so it went along with everything else.
+On InvenioRDM it is not a field at all: submitting a record to a community
+creates a *review request*, which a curator of that community then accepts or
+declines, and a record bound to a community is published by that acceptance
+rather than by `publish`.
+
+That is a different flow from everything else here — every other method is
+call-and-done, whereas this one has a state machine (pending, accepted,
+declined, cancelled) owned by somebody else — and supporting it properly means
+supporting and testing all of it. Use Zenodo's web interface to submit a record
+to a community.
+
+The communities a record is already in can be read, from
+`Record.raw["parent"]["communities"]`. Metadata carrying a legacy `communities`
+key is refused with a message saying all of the above, rather than silently
+dropping it.
+
+`custom_fields` is likewise not written by this package. Everything can be read:
+`Record.access` is an [`Access`][openscm_zenodo.zenodo.Access], and the rest is
+in `Record.raw`.

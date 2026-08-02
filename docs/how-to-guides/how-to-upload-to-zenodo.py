@@ -16,6 +16,12 @@
 # # How to upload to Zenodo
 #
 # Here we describe how to upload files to Zenodo.
+#
+# **TO BE REWRITTEN** (plan Part 9). Everything below uses `ZenodoInteractor`
+# and the legacy deposit API, which is being replaced by `ZenodoClient`. It is
+# also the last thing outside the legacy tests which reads `ZENODO_TOKEN`
+# directly, so the docs build needs that variable set even though a sandbox
+# token belongs in `ZENODO_SANDBOX_TOKEN`.
 
 # %% [markdown]
 # ## Imports

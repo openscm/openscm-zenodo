@@ -8,9 +8,11 @@ so `except ZenodoError` catches everything we raise on purpose.
 
 from __future__ import annotations
 
+import inspect
 import json
 import warnings
 from collections.abc import Collection
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from openscm_zenodo.logging import mask_token
@@ -39,6 +41,9 @@ READ_METADATA_EDITS_PATH = f"{_CLIENT_PATH}.get_edited_metadata_draft"
 
 UPDATE_METADATA_PATH = f"{_CLIENT_PATH}.update_metadata"
 """Full path to the method which writes metadata"""
+
+ACCESS_PATH = "openscm_zenodo.zenodo.Access"
+"""Full path to the class which describes who may see a record"""
 
 
 class ZenodoError(Exception):
@@ -71,24 +76,64 @@ class ZenodoWarning(UserWarning):
     """
 
 
-def warn_zenodo(message: str, *, stacklevel: int = 3) -> None:
+def _stacklevel_outside_this_package() -> int:
+    """
+    Work out the `stacklevel` which points at the first frame outside this package
+
+    Counting frames by hand does not work: the number depends on how many of our
+    own functions happen to sit between the public method and
+    [`warn_zenodo`][openscm_zenodo.exceptions.warn_zenodo], so it is wrong again
+    the moment a helper is added or removed, and it would have to be a parameter
+    on every public method to let a caller correct it. The question we actually
+    want answered is "which line of *theirs* led to this?", and that is one the
+    stack can answer for itself.
+
+    This is a well-trodden path rather than a clever idea: pandas keeps a
+    `find_stack_level` of its own for exactly this, and Python 3.12 added
+    `warnings.warn(..., skip_file_prefixes=...)` which does it in the standard
+    library. **Replace this with `skip_file_prefixes` when the supported Python
+    floor reaches 3.12**; we cannot use it while we support 3.10.
+
+    Returns
+    -------
+    :
+        `stacklevel` for
+        [`warnings.warn`](https://docs.python.org/3/library/warnings.html),
+        pointing at the nearest frame which is not one of ours
+    """
+    # `warnings.warn(stacklevel=1)` is `warn_zenodo` itself, `2` is its caller,
+    # which is where we start looking.
+    level = 2
+
+    frame = inspect.currentframe()
+    for _ in range(2):  # this function, then `warn_zenodo`
+        if frame is None:  # pragma: no cover - only without frame support
+            return level
+
+        frame = frame.f_back
+
+    package_dir = str(Path(__file__).parent)
+    while frame is not None and frame.f_code.co_filename.startswith(package_dir):
+        frame = frame.f_back
+        level += 1
+
+    return level
+
+
+def warn_zenodo(message: str) -> None:
     """
     Warn about something a caller needs to hear, whatever their logging setup
+
+    The warning is attributed to the nearest line which is not ours, however
+    many of our own frames it is raised beneath, see
+    `_stacklevel_outside_this_package`.
 
     Parameters
     ----------
     message
         What to say
-
-    stacklevel
-        Which frame the warning should be attributed to.
-
-        The default is right for a warning raised directly in the body of a
-        public method: `1` is this function, `2` is the method, and `3` is
-        whoever called the method, which is the line worth pointing at.
-        Add one for each extra frame between the public method and here.
     """
-    warnings.warn(message, ZenodoWarning, stacklevel=stacklevel)
+    warnings.warn(message, ZenodoWarning, stacklevel=_stacklevel_outside_this_package())
 
 
 class MissingTokenError(ZenodoError):
@@ -377,6 +422,41 @@ class RecordNotWritableError(ZenodoError):
             )
 
         super().__init__(msg)
+
+
+class AccessNotPermittedError(ZenodoError):
+    """
+    Raised when Zenodo will not let this account set the access which was asked for
+    """
+
+    def __init__(self, record_id: str, *, zenodo_domain: str, reported: str) -> None:
+        """
+        Initialise
+
+        Parameters
+        ----------
+        record_id
+            ID of the record whose access we were setting
+
+        zenodo_domain
+            The Zenodo domain the record is on
+
+        reported
+            What Zenodo said, which is the authority on why it refused
+        """
+        self.record_id = record_id
+        self.zenodo_domain = zenodo_domain
+        self.reported = reported
+
+        super().__init__(
+            f"Zenodo refused the access asked for on record {record_id!r} "
+            f"on {zenodo_domain}: {reported}. "
+            "As far as we understand, "
+            "Zenodo treats records themselves as public, and only an admin can "
+            f"change that, so `{ACCESS_PATH}.record` is not yours to set. "
+            f"Files are: use `{ACCESS_PATH}.files` and `{ACCESS_PATH}.embargo` "
+            "to keep those private."
+        )
 
 
 class DraftRecordDraftMetadataEditsError(ZenodoError):

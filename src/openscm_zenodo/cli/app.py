@@ -18,7 +18,7 @@ from openscm_zenodo.zenodo import (
     ZenodoDomain,
     ZenodoInteractor,
     create_new_version_legacy,
-    get_reserved_doi,
+    get_reserved_doi_legacy,
     load_env_file,
     resolve_token,
 )
@@ -166,6 +166,7 @@ Variables which are already set in the environment are not overridden.""",
     load_env_file(env_file)
 
 
+# TO BE DELETED (Part 8.2): removed from the CLI, `retrieve_metadata` in Python.
 @app.command(name="retrieve-metadata")
 def retrieve_metadata_command(
     deposition_id: DEPOSITION_ID_TYPE,
@@ -199,6 +200,8 @@ as the starting point for the next version of a deposit."""
     print(json.dumps(metadata, indent=2, sort_keys=True))
 
 
+# TO BE REWRITTEN (Part 8.1): renamed and generalised to `retrieve-citation`,
+# over `get_citation` rather than the legacy interactor.
 @app.command(name="retrieve-bibtex")
 def retrieve_bibtex_command(
     deposition_id: DEPOSITION_ID_TYPE,
@@ -218,6 +221,8 @@ def retrieve_bibtex_command(
     print(bibtex_entry)
 
 
+# TO BE DELETED (Part 8.2): removed from the CLI. `update_metadata` in Python,
+# and `reserve_or_get_doi` for what `--reserve-doi` did.
 @app.command(name="update-metadata")
 def update_metadata_command(
     deposition_id: DEPOSITION_ID_TYPE,
@@ -276,9 +281,11 @@ def update_metadata_command(
     )
 
     if reserve_doi:
-        print(get_reserved_doi(update_metadata_response))
+        print(get_reserved_doi_legacy(update_metadata_response))
 
 
+# TO BE REWRITTEN (Part 8.1): retained, but as a wrapper over
+# `ZenodoClient.upload_files` / `mirror_files` rather than the legacy interactor.
 @app.command(name="upload-files")
 def upload_files_command(
     deposition_id: DEPOSITION_ID_TYPE,
@@ -309,6 +316,8 @@ def upload_files_command(
     )
 
 
+# TO BE DELETED (Part 8.2): removed from the CLI,
+# `delete_files` / `delete_all_files` in Python.
 @app.command(name="remove-files")
 def remove_files_command(
     deposition_id: DEPOSITION_ID_TYPE,
@@ -354,6 +363,8 @@ def remove_files_command(
         )
 
 
+# TO BE DELETED (Part 8.2): removed from the CLI,
+# `create_or_get_new_version` in Python.
 @app.command(name="create-new-version")
 def create_new_version_command(  # noqa: PLR0913
     any_deposition_id: Annotated[

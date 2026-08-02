@@ -190,7 +190,7 @@ _LEGACY_KEYS: dict[str, str] = {
     "notes": ("`notes` is now an entry in `additional_descriptions`"),
     "prereserve_doi": (
         "`prereserve_doi` is gone. "
-        "Reserve a DOI with `ZenodoClient.reserve_doi` instead"
+        "Reserve a DOI with `ZenodoClient.reserve_or_get_doi` instead"
     ),
     "doi": ("`doi` is no longer part of the metadata, it lives in the record's `pids`"),
     "journal_title": (
@@ -199,8 +199,12 @@ _LEGACY_KEYS: dict[str, str] = {
         "not in `metadata`"
     ),
     "communities": (
-        "`communities` is no longer part of the metadata, "
-        "it lives in the record's `parent.communities`"
+        "`communities` is no longer part of the metadata, and this package does "
+        "not support setting it. On InvenioRDM, putting a record in a community "
+        "is a review request which a curator accepts, not a field you write, "
+        "so it is a different flow from everything here. Use Zenodo's web "
+        "interface to submit a record to a community; the communities a record "
+        'is already in can be read from `Record.raw["parent"]["communities"]`'
     ),
 }
 """

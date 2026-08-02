@@ -93,7 +93,7 @@ from the examples given in that link.
 ### 🆕 Features
 
 - Added the `--reserve-doi` flag to the `openscm-zenodo update-metadata` command.
-  Also added [`get_reserved_doi`][openscm_zenodo.zenodo.get_reserved_doi]. ([#10](https://github.com/openscm/openscm-zenodo/pull/10))
+  Also added [`get_reserved_doi`][openscm_zenodo.zenodo.get_reserved_doi_legacy]. ([#10](https://github.com/openscm/openscm-zenodo/pull/10))
 
 ### 🔧 Trivial/Internal Changes
 

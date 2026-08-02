@@ -320,13 +320,14 @@ functions — `record_url(record_id, zenodo_domain)` — rather than a class.
 | `get_record` | `get_published(record_id)` | `GET /api/records/{id}` — published records only, see 1.2.2 |
 | — | `get_record(record_id)` | published or draft, whichever it is (1.2.2) |
 | `get_deposition` | `get_draft(record_id)` | `GET /api/records/{id}/draft` — read only, `404` if none |
-| — | `create_record(metadata)` → `RecordID` | `POST /api/records` (brand-new record + its draft) |
+| — | `create_record()` → `Record` | `POST /api/records` — the only way to mint a record from nothing; every other creator derives one from an existing record. Takes no arguments (see 14.0). Mints a record ID *and* a parent ID; the record is unpublished until `publish` |
 | — | `create_or_get_edited_metadata_draft(record_id)` → `Record` | `POST /api/records/{id}/draft` — a published record's pending metadata edits (see 1.2.1, renamed in Part 6) |
 | `create_new_version_from_latest` / `get_draft_deposition_id` | `new_version(record_id, *, import_files=False)` → `RecordID` | `POST /api/records/{id}/versions` (empty by default) — also get-or-create (1.2.1) |
 | — | `import_files(record_id)` | `POST .../draft/actions/files-import` |
 | `get_latest_deposition_id` | `get_latest_version_id(record_id)` → `RecordID` | via `versions` / `links.latest` |
 | `get_concept_id` | `get_parent_id(record_id)` → `ParentID` | InvenioRDM "parent" id (all-versions id) |
 | `update_metadata` | `update_metadata(record_id, metadata)` | `PUT /api/records/{id}/draft` |
+| — | `update_access(record_id, access)` → `Record` | `PUT /api/records/{id}/draft`, read-modify-write — see Part 14 |
 | `get_metadata` | `get_metadata(record_id)` → `Metadata` | new schema (Part 6); no `user_controlled_only`, see the note at the top of Part 6 |
 | `publish` | `publish(record_id)` | `POST .../draft/actions/publish` |
 | `upload_file_to_bucket_url` | `upload_file(record_id, path, *, verify_checksum=True)` | init→content→commit (Part 2) |
@@ -1224,7 +1225,36 @@ Work items:
 
 ---
 
-## Part 7 — DOI reservation
+## Part 7 — DOI reservation — ✅ IMPLEMENTED
+
+**Done** (sequencing step 4, with Part 14). `ZenodoClient.reserve_or_get_doi`, with
+unit tests (`tests/test_records.py`) and live sandbox tests
+(`tests/integration/test_records_integration.py`). Deltas from the text below,
+all deliberate:
+
+- **`reserve_doi` is `reserve_or_get_doi`.** Zenodo is not idempotent here: a
+  second reservation is a `400 A PID already exists for type doi`, which would
+  break exactly the re-run that `import_files` and `create_or_get_new_version`
+  are shaped to survive. So it hands back the DOI which is already there, and the
+  name says so, in the house `<verb>_or_get_<noun>` word order.
+- **It asks the record first, and only reserves if there is nothing there.** The
+  first version reserved and recovered from the `400`; asking first is one
+  request in the common path either way, reads as what the name says, and makes
+  the published case fall out for free. On a `400` after that — somebody else
+  reserved one in between — we re-read rather than parsing Zenodo's complaint,
+  so there is no matching against wording which is Zenodo's to change.
+- **A published record hands back its DOI rather than raising.** Publishing mints
+  one, so the answer to "what is this record's DOI?" exists; refusing to give it
+  because the record can no longer be *changed* would be answering a question
+  nobody asked. `RecordNotWritableError` is left for the case which cannot
+  happen in practice: published, and somehow without a DOI.
+- **There is no module-level `get_reserved_doi(response)`.** `Record.doi` reads
+  `pids.doi` already, so the helper would have nothing left to do. The legacy
+  function is `get_reserved_doi_legacy`, freeing the name, exactly as was done for
+  `retrieve_metadata_legacy`.
+- **Verified live**: a reserved DOI survives a later `update_metadata`, which is
+  what makes the documented create → reserve → write-the-DOI-in → publish order
+  work at all.
 
 Replaces the legacy `prereserve_doi` flag. Add `reserve_doi(record_id) -> str`:
 `POST /api/records/{id}/draft/pids/doi` reserves a DOI on the draft; the reserved
@@ -1341,6 +1371,41 @@ it only because it wasn't in the keep-list.
 - `setup_logging`, `get_default_config`, `mask_token`, `__version__` stay as
   library functions used by the CLI. `loguru-config` stays an optional extra.
 
+### 8.4 The delete list
+
+Everything below is marked in the source with the string **`TO BE DELETED`**, so
+`grep -rn "TO BE DELETED" src tests docs` is the check that this section is
+complete and that nothing was missed. It all goes together: the legacy tests
+only exist to cover the legacy code, and the legacy code only survives so the
+current CLI keeps working until it is trimmed.
+
+**Tests — delete the whole file:**
+
+| File | Covers |
+|---|---|
+| `tests/test_zenodo.py` | `ZenodoInteractor`'s token masking; `tests/test_client.py` is the replacement |
+| `tests/integration/test_flow.py` | the legacy end-to-end flow; covered on the new API by `test_records_integration.py`, `test_upload_files_integration.py`, `test_versions_integration.py` and `test_publish_integration.py` |
+| `tests/integration/test_cli.py` | `create-new-version`, `update-metadata`, `remove-files` — all removed commands |
+
+**Tests — delete the part, not the file:**
+
+- `legacy_zenodo_token` in `tests/integration/conftest.py`, and the
+  `_token_where_the_legacy_code_looks` fixtures in the two files above. These
+  exist only because the legacy code reads `ZENODO_TOKEN` directly while a
+  sandbox token belongs in `ZENODO_SANDBOX_TOKEN`.
+
+**Tests — rewrite, do not delete:** `tests/test_cli_tokens.py`. It covers the
+token precedence chain, which the trimmed CLI keeps; only its scaffolding
+(driving `remove-files`, patching `ZenodoInteractor`) is legacy. Deleting it
+would silently drop the only coverage of rule (2) in 1.1.1.
+
+**Source:** `ZenodoInteractor` and every `*_legacy` function —
+`retrieve_metadata_legacy`, `create_new_version_legacy`,
+`get_reserved_doi_legacy`, `retrieve_bibtex_entry` — plus the removed commands in
+`cli/app.py` and `MetadataType`. `docs/how-to-guides/how-to-upload-to-zenodo.py`
+is rewritten against `ZenodoClient` (Part 9), which also removes the last thing
+outside the legacy tests reading `ZENODO_TOKEN` directly.
+
 ---
 
 ## Part 9 — Packaging, docs, tests
@@ -1359,9 +1424,13 @@ it only because it wasn't in the keep-list.
   retained commands, including an embargoed-download example and the citation
   format/style table from Part 10.
   Add a prominent **migration guide** covering (a) the new metadata schema,
-  (b) the removed CLI commands → Python mapping, and (c) `retrieve-bibtex` →
-  `retrieve-citation --format bibtex`. Bump to a new major version and lead the
-  changelog with the breaking change.
+  (b) the removed CLI commands → Python mapping, (c) `retrieve-bibtex` →
+  `retrieve-citation --format bibtex`, and (d) **the dropped capability**:
+  `communities` was a legacy metadata field and setting it is no longer
+  supported at all, see "Explicitly out of scope". That one is a removal rather
+  than a rename, so it belongs in the guide and in the changelog's breaking
+  section rather than being left for someone to discover. Bump to a new major
+  version and lead the changelog with the breaking change.
 - **Tests:**
   - **Live-API integration coverage of every endpoint we call** — see Part 12.
   - Unit tests for the **metadata translation/validation** (Part 6) — highest
@@ -1718,17 +1787,17 @@ implemented:
 | `GET /api/records/{id}/files/{name}/content` | `download_file(draft=False)` | prod (read) | ✅ |
 | `GET /api/records/{id}/versions` / `links.latest` | `get_latest_version_id` | prod (read) | ✅ |
 | parent id | `get_parent_id` | prod (read) | ✅ |
-| `POST /api/records` | `create_record` | sandbox |  |
+| `POST /api/records` | `create_record` | sandbox | ✅ |
 | `GET /api/records/{id}/draft` | `get_draft` | sandbox | ✅ |
 | `POST /api/records/{id}/draft` | `create_or_get_edited_metadata_draft` | sandbox | ✅ |
-| `PUT /api/records/{id}/draft` | `update_metadata` | sandbox | ✅ |
+| `PUT /api/records/{id}/draft` | `update_metadata`, `update_access` | sandbox | ✅ |
 | `POST /api/records/{id}/draft/files` | upload init | sandbox | ✅ |
 | `PUT .../draft/files/{name}/content` | upload content | sandbox | ✅ |
 | `POST .../draft/files/{name}/commit` | upload commit | sandbox | ✅ |
 | `GET /api/records/{id}/draft/files` | `list_files(draft=True)` | sandbox | ✅ |
 | `GET .../draft/files/{name}/content` | `download_file(draft=True)` | sandbox | ✅ |
 | `DELETE .../draft/files/{name}` | `delete_files` | sandbox | ✅ |
-| `POST .../draft/pids/doi` | `reserve_doi` | sandbox |  |
+| `POST .../draft/pids/doi` | `reserve_or_get_doi` | sandbox | ✅ |
 | `POST .../draft/actions/publish` | `publish` | sandbox | ✅ |
 | `POST /api/records/{id}/versions` | `new_version` | sandbox | ✅ |
 | `POST .../draft/actions/files-import` | `import_files` | sandbox | ✅ |
@@ -2071,10 +2140,197 @@ pins that in place would be pinning the wrong behaviour.
 
 ---
 
+## Part 14 — Record settings which are neither files nor metadata — ✅ IMPLEMENTED
+
+**Done** (sequencing step 4). `ZenodoClient.create_record`, `update_access`,
+`Access.to_json` / `Embargo.to_json` and the module-level `was_field_sent`, with
+unit tests (`tests/test_records.py`) and live sandbox tests
+(`tests/integration/test_records_integration.py`). Everything 14.1 and 14.2
+predicted held. Deltas from the text below:
+
+- **`create_record()` takes no arguments at all, and returns a `Record`.** It
+  first grew `metadata` and `access` parameters, and both are gone. **A new record
+  is unpublished, and an unpublished record is invisible to everyone else** —
+  verified against the sandbox, where an unauthenticated request gets `404` on the
+  published endpoints and `403` on the draft endpoints and on the file content,
+  *whether the record's files are "public" or "restricted"*. So there is no window
+  in which anything is exposed, and nothing has to be set at creation. That kills
+  the only argument for `access=` here, and with it the argument for `metadata=`:
+  one home for metadata (`update_metadata`), one for access (`update_access`), one
+  for files (`upload_files`). It returns a `Record` because `RecordIDLike` takes
+  one everywhere, so the new record can be passed straight on.
+- **Zenodo's `errors` array is mostly *not* about refusals.** This was the one
+  surprise. It also carries "this draft is not finished yet"
+  (`metadata.title: Missing data for required field`, `files.enabled: Missing
+  uploaded files`), which turns up on nearly every create and every access update
+  of a fileless draft. Warning about all of it made three of the first live tests
+  emit noise. So `was_field_sent(sent, field)` filters the reports down to fields
+  we actually asked for: a refusal is always about something we sent, and an
+  unfinished draft is always about something we did not.
+- **Warnings find their own `stacklevel`.** Counting frames by hand was wrong
+  twice while writing this, and it cannot be right in general: the number depends
+  on how many of our helpers happen to sit between the public method and the
+  warning, so it changes whenever one is added — and letting a caller correct it
+  would mean a `stacklevel` parameter on every public method. `warn_zenodo` now
+  walks the stack to the first frame outside the package, which is the thing we
+  actually meant. Same approach as pandas' `find_stack_level`; **replace it with
+  `warnings.warn(skip_file_prefixes=...)` when the Python floor reaches 3.12.**
+- **`update_access` refuses to guess which metadata to preserve.** It reads the
+  draft itself rather than accepting one the caller passes in: the metadata it
+  sends back has to be what Zenodo holds *now*, or the call would quietly revert
+  someone else's edit.
+- **The refusal of `access.record="restricted"` is translated**, into
+  `AccessNotPermittedError`, which says that only an admin can restrict a record
+  and points at `Access.files`/`Embargo` for what does work. We still *send* it:
+  blocking it in our own code would outlast Zenodo changing its mind, and the
+  refusal is Zenodo's to make. `get_reported_errors` grew a `fields` argument so
+  that "did it complain about access?" is answered by the field name rather than
+  by matching on the wording.
+- **Not done: `delete_record`.** The test fixtures still delete through the
+  private `_request`, because a record can now be created through the public API
+  but not removed through it. Worth its own decision rather than a drive-by
+  addition — it is the one irreversible-ish operation the library would gain.
+
+A record is more than its files and its metadata: `access`, `pids`, `files.enabled`,
+`custom_fields` and the parent's `communities` all sit outside both. Parts 2–5
+covered files, Part 6 covered metadata, Part 7 covers the DOI. This part covers
+**access**, and names what is left so the gaps are deliberate rather than
+forgotten.
+
+### 14.0 What "create a record" means
+
+`create_record` mints a record, and a record is **unpublished by definition until
+`publish` is called**. There is no separate draft object with its own ID — "draft"
+is the name of that state, and of the endpoint (`/api/records/{id}/draft`) through
+which an unpublished record is written. The method map used to describe this as
+creating "a brand-new record + its draft", which reads as though two things are
+made; it is one thing in its initial state.
+
+What is worth knowing about the call, verified against the sandbox:
+
+- it mints **two** IDs — the record ID and the parent ("all versions") ID;
+- the record is deletable while it is unpublished, and never afterwards;
+- the response carries an `expires_at`, so a never-published draft does not appear
+  to live forever;
+- an **empty payload is accepted** (`201`), and incomplete metadata comes back in
+  an `errors` array beside the created record rather than being refused — which is
+  the same "Zenodo validates at publish" behaviour Part 6 found, arriving one step
+  earlier;
+- **an unpublished record is invisible to everyone else.** An unauthenticated
+  request gets `404` on `/api/records/{id}` and `/files`, and `403` on `/draft`,
+  `/draft/files` and the file content — *the same whether `access.files` is
+  "public" or "restricted"*. This is why `create_record` ended up taking no
+  arguments: there is no window to close, so metadata, access and files are all
+  set afterwards, each by the one method which owns it.
+
+`create_record` is the root of the tree: `create_or_get_edited_metadata_draft` and
+`create_or_get_new_version` both require an existing *published* record and derive
+a new one from it, so without `create_record` the library can only ever extend
+chains something else started. That is not hypothetical — `tests/integration/conftest.py`
+reaches into the private `_request` to make a record today, which is the concrete
+cost of the missing method.
+
+### 14.1 `PUT .../draft` is a replace for `metadata` and a preserve for `access`
+
+**Verified against the sandbox, 2026-07-30, and it is not symmetric:**
+
+| Body sent | Effect on `metadata` | Effect on `access` |
+|---|---|---|
+| `{"metadata": {...}}` only | replaced with what was sent | **preserved**, including a non-default value |
+| `{"access": {...}}` only | **wiped** — title, creators, `resource_type` and `version` all came back empty | replaced with what was sent |
+
+So "the API tolerates a partial body" is **not** a safe generalisation, and Part 4's
+finding (a metadata-only `PUT` does not wipe `access`) does not run in reverse.
+Consequences:
+
+- **`update_access` has to be read-modify-write**: read the draft, then `PUT` its
+  existing `metadata` back alongside the new `access`. An access-only `PUT` is a
+  silent metadata wipe, which is the worst kind of bug this library could ship.
+- **The `access` block must carry `record`.** `{"access": {"files": "restricted"}}`
+  is a `400` naming `'record'`, so a complete block is always sent.
+- `Access.status` is Zenodo's own summary of the other two (`"open"`,
+  `"embargoed"`, `"metadata-only"`) and is **never sent**.
+
+### 14.2 Restricted *records* are not reachable through the API; embargoed *files* are
+
+`access.record: "restricted"` is refused with
+`400 A validation error occurred. - access: You don't have permissions to manage record access.`
+on **`POST /api/records` and on `PUT .../draft` alike**, including on a draft the
+token had created seconds earlier. So it is not about ownership, not about the
+create path, and not a token scope that can be widened by minting a better token.
+`access.files: "restricted"` with an `embargo` is accepted on both paths and
+round-trips.
+
+Whether that is deliberate Zenodo policy or a bug in their build cannot be told
+from outside. Either way the live test **asserts the refusal**, in the style of the
+other "pin Zenodo's behaviour so we notice if it changes" tests (`import_files`
+into a non-empty draft, a published record never reporting pending edits). It also
+means Part 12.3's restricted-access scenario has to be written around embargoed
+files rather than restricted records.
+
+### 14.3 API
+
+```python
+def update_access(self, record_id: RecordIDLike, access: Access) -> Record:
+    """Change who may see a record's draft and its files."""
+```
+
+- Read-modify-write, per 14.1. Same `404` → `RecordNotWritableError` /
+  `RecordNotFoundError` translation as `update_metadata`, so the two read as a
+  pair.
+- `Access.to_json` and `Embargo.to_json` are what this needs.
+- **`update_access` is the only way to set access**, and `create_record` takes
+  nothing. The argument for setting it at creation was that restricted files
+  should never have a public window; there is no such window, because an
+  unpublished record is invisible to everyone else (see the note at the top of
+  this part).
+
+### 14.4 What is left, and whose job it is
+
+| Block | Owner | Status |
+|---|---|---|
+| `access` | this part | `update_access` |
+| `pids` | Part 7 | `reserve_or_get_doi`; `Record.doi` reads it |
+| `files.enabled` | **settled: not offered** | Zenodo refuses it *quietly* — `201`, files still enabled, refusal only in `errors` — so a metadata-only record cannot be made by an ordinary account and a parameter for it would be a lie |
+| `custom_fields` | out of scope | stays in `Record.raw` |
+| `parent.communities` | **not supported, deliberately** | read-only. See "Explicitly out of scope" |
+
+### 14.5 Three claims to delete when this lands
+
+All three assert that access can only be set at creation, which 14.1 disproves:
+
+- `zenodo.py`'s `Access` docstring — "Writing this is not supported yet — it lands
+  with `create_record`, where a record's access has to be set at creation anyway."
+- `update_metadata`'s docstring — the same clause.
+- `docs/further-background/metadata-schema.md` — "with `create_record`, which has
+  to set a record's access at creation anyway."
+
+### 14.6 Tests
+
+- **Unit**: `update_access` sends the draft's existing metadata back alongside the
+  new access (the regression test for 14.1's wipe); a complete `access` block is
+  always sent, including `record`; `Access.status` is never sent;
+  `create_record` sends an empty body and says nothing about metadata.
+- **Live (sandbox)**: `create_record` round-trips and comes back empty;
+  **a new record is invisible to an unauthenticated request** (`404` on the
+  published endpoints, `403` on the draft ones) — the test which justifies
+  `create_record` taking no arguments; `update_access` to `files: restricted` +
+  embargo round-trips **and leaves the metadata intact**; an embargo can be
+  lifted again; `access.record: "restricted"` raises
+  `AccessNotPermittedError` (14.2); a metadata update after an access change
+  leaves the access alone.
+- **Warning attribution** (unit, `tests/test_exceptions.py`): two warnings raised
+  through different numbers of our own frames both land on the caller's line.
+  That is what makes the frame-walking `stacklevel` safe to rely on, and it fails
+  if anyone reintroduces a hard-coded count.
+
+---
+
 ## Suggested sequencing
 
-**Where we are.** Steps 0, 1, 2, 3, 6 and 7 are done, and step 5 is done apart
-from Part 11. They were taken out of order: uploads, mirror, versions and
+**Where we are.** Steps 0, 1, 2, 3, 4, 6 and 7 are done, and step 5 is done apart
+from Part 11. The outstanding work is **Part 11** (the remainder of step 5),
+**2b**, **8** and **9**. They were taken out of order: uploads, mirror, versions and
 download (Parts 2–5) landed before the read paths and before the metadata
 schema, so the transport was exercised by the file work instead. Nothing
 downstream broke as a result — `update_metadata` landed as a pass-through with
@@ -2114,9 +2370,13 @@ turn on. What is left of it is `create_record`, `reserve_doi`, and confirming
    settled here.~~ ✅ **DONE** — plus the typed `Record`,
    `create_or_get_edited_metadata_draft` and `has_edited_metadata_draft`.
    See the note at the top of Part 6 and the decisions in 13.3.
-4. **Write paths** — `create_record` and `reserve_doi` (Part 7). ~~`get_or_create_draft`
+4. ~~**Write paths** — `create_record` and `reserve_doi` (Part 7), plus
+   `update_access` and `Access.to_json` (Part 14).~~ ✅ **DONE** — `create_record`,
+   `update_access`, `reserve_or_get_doi` and `was_field_sent`. See the notes at
+   the top of Parts 7 and 14. ~~`get_or_create_draft`
    (Part 1.2.1), `update_metadata`, `publish`~~ ✅ **DONE with step 3**;
    `new_version` / `import_files` / `delete_files` landed with Parts 3–4.
+   The Part 12.2 endpoint matrix is now fully ticked.
 5. **Uploads (Parts 2, 11)** — ~~the init→content→commit `upload_file`,
    `tenacity` upload retry, checksum verification, `upload_files` parallelism,
    the shared `leave=False` progress-bar helper (Part 2.1)~~ ✅ **DONE** (Part 2,
@@ -2148,6 +2408,30 @@ changing under us.
 
 ## Explicitly out of scope
 
+- **Putting a record in a community.** This is a decision, not an omission, and
+  it is worth being blunt about because the legacy API *did* allow it: on the
+  deposit schema `communities` was a metadata field, so it came along with
+  everything else, and this release drops that.
+
+  The reason is that InvenioRDM does not have such a field. Submitting a record
+  to a community creates a **review request**, which a curator of that community
+  accepts or declines, and a record bound to a community is published by that
+  acceptance rather than by `publish` — a community-bound draft is submitted with
+  `submit-review` *instead of* publishing it. So it is not one more thing to
+  write: it is an asynchronous flow with a state machine (pending, accepted,
+  declined, cancelled) owned by somebody else, and `publish`'s contract would
+  have to fork to accommodate it. Supporting that means supporting and testing
+  all of it, including paths our own account cannot reach — Part 12's rule is
+  that no endpoint ships without a live test, and the interesting case here needs
+  a community we do *not* own to review a submission we make.
+
+  So: **we do not support specifying the community.** Zenodo's web interface
+  does, and it is the right tool for a step which involves another person
+  anyway. The communities a record is already in are readable from
+  `Record.raw["parent"]["communities"]`, and metadata carrying a legacy
+  `communities` key is refused with a message saying so, so nobody discovers this
+  by having their setting silently dropped. The migration guide (Part 9) says the
+  same.
 - Any backward-compatibility with the legacy Deposit API or its metadata schema.
   This is a clean break.
 - A local record-id cache like `zenodo-client`'s PyStow store — the stateless

@@ -46,6 +46,7 @@ from openscm_zenodo.checksums import (
     get_md5_from_checksum,
 )
 from openscm_zenodo.exceptions import (
+    AccessNotPermittedError,
     ChecksumMismatchError,
     DraftMetadataEditsNotFoundError,
     DraftRecordDraftMetadataEditsError,
@@ -813,14 +814,49 @@ class Embargo:
             reason=raw.get("reason"),
         )
 
+    def to_json(self) -> dict[str, Any]:
+        """
+        Convert to the shape Zenodo expects
+
+        Returns
+        -------
+        :
+            The embargo, as Zenodo describes it.
+
+            `active` is always sent, so that lifting an embargo
+            is as expressible as setting one.
+            `until` and `reason` are left out when we do not have them,
+            rather than being sent as `null`.
+        """
+        res: dict[str, Any] = {"active": self.active}
+
+        if self.until is not None:
+            res["until"] = self.until
+
+        if self.reason is not None:
+            res["reason"] = self.reason
+
+        return res
+
 
 @define
 class Access:
     """
     Who may see a record and its files
 
-    Writing this is not supported yet — it lands with `create_record`,
-    where a record's access has to be set at creation anyway.
+    Set with
+    [`update_access`][openscm_zenodo.zenodo.ZenodoClient.update_access],
+    while the record is still unpublished.
+
+    Zenodo's model is that records themselves are public and only an admin can
+    change that, while **files** are yours to control, through
+    [`files`][openscm_zenodo.zenodo.Access.files] and
+    [`embargo`][openscm_zenodo.zenodo.Access.embargo].
+    So `record="restricted"` is refused for ordinary accounts
+    (`400 You don't have permissions to manage record access.`).
+    We pass it to Zenodo anyway rather than blocking it here — the refusal is
+    Zenodo's to make and its rules may change — and translate the refusal into
+    [`AccessNotPermittedError`][openscm_zenodo.exceptions.AccessNotPermittedError].
     """
 
     record: str = "public"
@@ -860,6 +896,29 @@ class Access:
             embargo=Embargo.from_json(raw.get("embargo", {})),
             status=raw.get("status"),
         )
+
+    def to_json(self) -> dict[str, Any]:
+        """
+        Convert to the shape Zenodo expects
+
+        Returns
+        -------
+        :
+            The access, as Zenodo describes it.
+
+        Examples
+        --------
+        >>> Access().to_json()
+        {'record': 'public', 'files': 'public', 'embargo': {'active': False}}
+        """
+        return {
+            # Always send because excluding record leads to a 400 error
+            "record": self.record,
+            "files": self.files,
+            "embargo": self.embargo.to_json(),
+            # status is never sent,
+            # because Zenodo derives it from the other three.
+        }
 
 
 @define
@@ -1083,14 +1142,6 @@ class Record:
 RecordIDLike: TypeAlias = "str | RecordID | Record"
 """
 Anything we will take as "which record"
-
-A [`Record`][openscm_zenodo.zenodo.Record] is accepted as well as its ID so
-that a record which has just been handed back can be passed straight on,
-rather than having to be unwrapped at every call site.
-Note the asymmetry with metadata, which is only ever taken as a
-[`Metadata`][openscm_zenodo.metadata.Metadata]: a `Record` *is* an ID plus more,
-so nothing has to be guessed, whereas metadata given as a mapping or a path is
-a different thing which has to be interpreted.
 """
 
 
@@ -1199,23 +1250,33 @@ def _run_in_parallel(
     return [future.result() for future in futures]
 
 
-def get_reported_errors(response: requests.models.Response) -> str | None:
+def get_reported_errors(
+    response: requests.models.Response, *, fields: Collection[str] | None = None
+) -> str | None:
     """
-    Get the failure a successful-looking response is reporting, if it is reporting one
+    Get the failure a response is reporting, if it is reporting one
 
     Zenodo answers a failed file transfer with a `200` whose body carries an
     `errors` key, so a successful status code is not on its own proof that
-    anything happened.
+    anything happened. The same key carries the detail of a `400`.
 
     Parameters
     ----------
     response
         Response to look at
 
+    fields
+        Only report errors about these fields.
+
+        If not supplied, everything Zenodo reported is returned.
+        This is how a caller asks "did it complain about *this*?" without
+        matching on the wording of the complaint, which is Zenodo's to change.
+
     Returns
     -------
     :
-        What Zenodo said went wrong, or `None` if it did not say anything.
+        What Zenodo said went wrong, or `None` if it did not say anything
+        (about `fields`, if those were given).
 
         A body which is not JSON, or not an object, counts as not saying
         anything: this is a safety net rather than a parser, and a response we
@@ -1231,8 +1292,19 @@ def get_reported_errors(response: requests.models.Response) -> str | None:
         return None
 
     errors = body.get("errors")
+    if not errors:
+        return None
 
-    return None if not errors else str(errors)
+    if fields is None:
+        return str(errors)
+
+    matching = [
+        error
+        for error in errors
+        if isinstance(error, Mapping) and error.get("field") in fields
+    ]
+
+    return None if not matching else str(matching)
 
 
 def should_retry_transfer(
@@ -1325,6 +1397,47 @@ def _log_transfer_retry(retry_state: RetryCallState) -> None:
         f"Transfer attempt {retry_state.attempt_number} failed with {exc!r}. "
         f"{trying_again}"
     )
+
+
+def was_field_sent(sent: Mapping[str, Any], field: str) -> bool:
+    """
+    Did a request body contain the field Zenodo is complaining about?
+
+    Zenodo reports two different things in a successful response's `errors`:
+    settings it declined to apply (`files.enabled`, `access.record`), and
+    metadata which is not there yet (`metadata.title: Missing data for required
+    field`). Only the first is news — an unfinished draft is a normal thing to
+    have, and Zenodo only insists on complete metadata at publish time.
+
+    Parameters
+    ----------
+    sent
+        The request body we sent
+
+    field
+        Dotted path of the field Zenodo named, e.g. `"access.record"`
+
+    Returns
+    -------
+    :
+        `True` if `field` was in `sent`
+
+    Examples
+    --------
+    >>> was_field_sent({"access": {"record": "restricted"}}, "access.record")
+    True
+    >>> was_field_sent({"metadata": {"title": "A title"}}, "metadata.creators")
+    False
+    """
+    current: Any = sent
+
+    for part in field.split("."):
+        if not isinstance(current, Mapping) or part not in current:
+            return False
+
+        current = current[part]
+
+    return True
 
 
 def _repr_session(session: requests.Session | None) -> str:
@@ -3352,8 +3465,6 @@ class ZenodoClient:
                     f"Ignoring {' and '.join(supplied)}: "
                     f"they only apply to {CitationFormat.citation.value!r}, "
                     f"not {fmt.value!r}",
-                    # `get_citation` -> `_get_citation_params` -> here
-                    stacklevel=4,
                 )
 
             return None
@@ -3372,8 +3483,6 @@ class ZenodoClient:
                 "so we are sending it anyway. "
                 "If Zenodo does not know it either, "
                 "the request comes back as a 400.",
-                # `get_citation` -> `_get_citation_params` -> here
-                stacklevel=4,
             )
 
         return {"style": style, "locale": locale}
@@ -3587,6 +3696,243 @@ class ZenodoClient:
 
         return True
 
+    def _check_metadata_before_sending(
+        self,
+        metadata: Metadata,
+        *,
+        description: str,
+        validate: bool,
+        warn_unknown_vocabulary: bool,
+    ) -> dict[str, Any]:
+        """
+        Look over metadata on its way out, and convert it to Zenodo's shape
+
+        Internal helper for functions that need to set metadata.
+
+        Parameters
+        ----------
+        metadata
+            Metadata on its way to Zenodo
+
+        description
+            Description of what the metadata is being used for
+
+            Used in the error message if `validate` finds a problem.
+
+        validate
+            Should we check that the metadata is complete?
+
+        warn_unknown_vocabulary
+            Should we warn about vocabulary values we do not recognise?
+
+        Returns
+        -------
+        :
+            The metadata, in the shape Zenodo expects
+
+        Raises
+        ------
+        MetadataValidationError
+            `validate` is on and the metadata is not complete
+        """
+        if validate:
+            metadata.validate(description=description)
+
+        if warn_unknown_vocabulary:
+            unknown = metadata.find_unknown_vocabulary_values()
+            if unknown:
+                warn_zenodo(
+                    # The prose goes first and the reports last: each one ends
+                    # with a vocabulary in full, so anything after them is a
+                    # long way down the message.
+                    "Some of this metadata uses vocabulary values we do not "
+                    "know of. Zenodo's vocabularies are longer than the lists "
+                    "we keep and they change, so this may well be fine; pass "
+                    "`warn_unknown_vocabulary=False` to silence this.\n"
+                    + "\n".join(f"- {value}" for value in unknown),
+                )
+
+        return metadata.to_json()
+
+    def _warn_about_discarded_metadata(
+        self,
+        *,
+        sent: Mapping[str, Any],
+        got: Record,
+        record_id: str | RecordID,
+    ) -> None:
+        """
+        Warn about metadata Zenodo took but did not store
+
+        Parameters
+        ----------
+        sent
+            Metadata we sent
+
+        got
+            Record Zenodo sent back
+
+        record_id
+            ID of the record the metadata was for
+
+        """
+        discarded = find_discarded_metadata(sent=sent, got=got.metadata)
+        if not discarded:
+            return
+
+        warn_zenodo(
+            f"Zenodo discarded "
+            f"{', '.join(repr(key) for key in discarded)} "
+            f"from the metadata of record {record_id!r}. "
+            "Zenodo accepts values it cannot parse and then stores nothing, "
+            "so the usual cause is a value it could not read "
+            "(e.g. a `publication_date` which is not a date, "
+            "a `version` longer than about 190 characters). "
+            "Pass `warn_discarded=False` to silence this.",
+        )
+
+    def _warn_about_ignored(
+        self,
+        body: Mapping[str, Any],
+        *,
+        sent: Mapping[str, Any],
+        description: str,
+    ) -> None:
+        """
+        Warn about settings Zenodo declined to apply without refusing the request
+
+        Zenodo does not always refuse what it will not do.
+        `files.enabled: false` comes back `201` with the record created,
+        files still enabled, and the refusal reported only in the response
+        (`"You don't have permissions to manage files options."`).
+        Without this function, that setting goes missing without a word.
+
+        Only fields which were actually sent are reported, see
+        [`was_field_sent`][openscm_zenodo.zenodo.was_field_sent].
+        The same `errors` array can carry messages which are not a problem
+        (e.g. "this draft is not finished yet", which is often fine).
+
+        Parameters
+        ----------
+        body
+            The parsed response body
+
+        sent
+            The request body we sent
+
+        description
+            Description of what we were doing, used in the message
+
+        """
+        reports = []
+        for error in body.get("errors") or []:
+            if not isinstance(error, Mapping):
+                reports.append(f"- {error}")
+                continue
+
+            field = error.get("field", "")
+            if not was_field_sent(sent, field):
+                # Some other reporting we don't care about here
+                continue
+
+            reports.append(f"- {field}: {' '.join(error.get('messages', []))}")
+
+        if not reports:
+            return
+
+        warn_zenodo(
+            f"Zenodo did not refuse our request to {description}, "
+            "but it declined to apply some of what we asked for, "
+            "so the settings named below are not what you asked them to be. "
+            "Pass `warn_ignored=False` to silence this.\n" + "\n".join(reports),
+        )
+
+    def _raise_for_missing_draft(
+        self, exc: ZenodoHTTPError, *, record_id: str | RecordID, what: str
+    ) -> NoReturn:
+        """
+        Turn a `404` from a record's draft endpoint into the reason for it
+
+        A `404` from the draft endpoint has two causes which need different
+        answers: the record is published, so there is no draft to write to,
+        or there is no such record at all.
+
+        Parameters
+        ----------
+        exc
+            The error to translate
+
+        record_id
+            ID of the record we were writing to
+
+        what
+            What we were trying to write, for
+            [`RecordNotWritableError`][openscm_zenodo.exceptions.RecordNotWritableError]
+
+        Raises
+        ------
+        RecordNotWritableError
+            The record is published
+
+        RecordNotFoundError
+            There is no record with this ID
+
+        ZenodoHTTPError
+            `exc`, if it was not a `404` and so is none of our business
+        """
+        if exc.response.status_code != HTTP_NOT_FOUND:
+            raise exc
+
+        if self._published_record_exists(record_id):
+            raise RecordNotWritableError(
+                str(record_id),
+                zenodo_domain=self.zenodo_domain_url,
+                what=what,
+            ) from exc
+
+        raise RecordNotFoundError(
+            str(record_id),
+            zenodo_domain=self.zenodo_domain_url,
+            token_source=self.token_source,
+        ) from exc
+
+    def create_record(self) -> Record:
+        """
+        Create a record
+
+        This is the only way to make a record from nothing.
+        Zenodo mints two IDs here: the record's own, and its parent's
+        (see [`Record.parent_id`][openscm_zenodo.zenodo.Record.parent_id]).
+
+        The record is created empty.
+        Fill it out with
+        [`update_metadata`][openscm_zenodo.zenodo.ZenodoClient.update_metadata],
+        [`update_access`][openscm_zenodo.zenodo.ZenodoClient.update_access] and
+        [`upload_files`][openscm_zenodo.zenodo.ZenodoClient.upload_files].
+        The record only needs to be complete before calling
+        [`publish`][openscm_zenodo.zenodo.ZenodoClient.publish].
+
+        Returns
+        -------
+        :
+            The new record
+        """
+        logger.info("Creating a record")
+
+        response = self._request(
+            "/api/records",
+            method="POST",
+            requires_auth=True,
+            headers={"Accept": INVENIORDM_JSON_ACCEPT},
+            json={},
+            description="create a record",
+        )
+        created = Record.from_json(response.json())
+
+        logger.info(f"Created record {created.record_id!r}")
+
+        return created
+
     def update_metadata(
         self,
         record_id: RecordIDLike,
@@ -3616,15 +3962,11 @@ class ZenodoClient:
         metadata
             Metadata to apply.
 
-            Build it with [`Metadata`][openscm_zenodo.metadata.Metadata], or
-            load it from a file with
-            [`Metadata.from_file`][openscm_zenodo.metadata.Metadata.from_file].
-
             This is the draft's metadata, not the whole draft, and it replaces
             what is there rather than being merged into it.
-            Settings which live outside the metadata, such as `access`,
-            are left alone. Writing *those* is not supported yet; it lands with
-            `create_record`, which has to set them at creation anyway.
+            Settings which live outside the metadata are left alone;
+            e.g. `access` has
+            [`update_access`][openscm_zenodo.zenodo.ZenodoClient.update_access].
 
         warn_unknown_vocabulary
             Should we warn about vocabulary values we do not recognise?
@@ -3669,25 +4011,14 @@ class ZenodoClient:
         """
         record_id = get_record_id(record_id)
 
-        if validate:
-            metadata.validate(description=f"update record {record_id!r}")
-
-        if warn_unknown_vocabulary:
-            unknown = metadata.find_unknown_vocabulary_values()
-            if unknown:
-                warn_zenodo(
-                    # The prose goes first and the reports last: each one ends
-                    # with a vocabulary in full, so anything after them is a
-                    # long way down the message.
-                    "Some of this metadata uses vocabulary values we do not "
-                    "know of. Zenodo's vocabularies are longer than the lists "
-                    "we keep and they change, so this may well be fine; pass "
-                    "`warn_unknown_vocabulary=False` to silence this.\n"
-                    + "\n".join(f"- {value}" for value in unknown)
-                )
+        metadata_json = self._check_metadata_before_sending(
+            metadata,
+            description=f"update record {record_id!r}",
+            validate=validate,
+            warn_unknown_vocabulary=warn_unknown_vocabulary,
+        )
 
         logger.info(f"Updating the metadata of record {record_id!r}")
-        metadata_json = metadata.to_json()
         logger.debug(f"New metadata: {metadata_json}")
 
         try:
@@ -3701,43 +4032,221 @@ class ZenodoClient:
             )
 
         except ZenodoHTTPError as exc:
-            if exc.response.status_code != HTTP_NOT_FOUND:
-                raise
-
-            if self._published_record_exists(record_id):
-                raise RecordNotWritableError(
-                    str(record_id),
-                    zenodo_domain=self.zenodo_domain_url,
-                    what="metadata",
-                ) from exc
-
-            raise RecordNotFoundError(
-                str(record_id),
-                zenodo_domain=self.zenodo_domain_url,
-                token_source=self.token_source,
-            ) from exc
+            self._raise_for_missing_draft(exc, record_id=record_id, what="metadata")
 
         updated = Record.from_json(response.json())
 
         if warn_discarded:
-            # Warned about here rather than in a helper, so that the warning
-            # points at whoever called us rather than at a line of ours.
-            discarded = find_discarded_metadata(
-                sent=metadata_json, got=updated.metadata
+            self._warn_about_discarded_metadata(
+                sent=metadata_json,
+                got=updated,
+                record_id=record_id,
             )
-            if discarded:
-                warn_zenodo(
-                    f"Zenodo discarded "
-                    f"{', '.join(repr(key) for key in discarded)} "
-                    f"from the metadata of record {record_id!r}. "
-                    "It accepts values it cannot parse and then stores nothing, "
-                    "so the usual cause is a value it could not read "
-                    "(a `publication_date` which is not a date, "
-                    "a `version` longer than about 190 characters). "
-                    "Pass `warn_discarded=False` to silence this."
-                )
 
         return updated
+
+    def update_access(
+        self,
+        record_id: RecordIDLike,
+        access: Access,
+        *,
+        warn_ignored: bool = True,
+    ) -> Record:
+        """
+        Change who may see an unpublished record and its files
+
+        This reads the record before writing it in order to preserve other metadata.
+        Zenodo's `PUT` is a *replace* for metadata and a *preserve* for access,
+        which is not symmetric: sending only an access block
+        leaves the record with no metadata at all.
+        So we send the metadata Zenodo currently holds back to it, untouched,
+        alongside the new access.
+
+        Not everything is settable, see [`Access`][openscm_zenodo.zenodo.Access]:
+        for example `record="restricted"` is refused for ordinary accounts.
+
+        Parameters
+        ----------
+        record_id
+            ID of the record to update, or the record itself
+
+        access
+            Who may see the record and its files.
+
+            This replaces what is there rather than being merged into it, so
+            read the record's current
+            [`access`][openscm_zenodo.zenodo.Record.access] and modify that if
+            only one part is meant to change.
+
+        warn_ignored
+            Should we warn about anything Zenodo declined to apply?
+
+        Returns
+        -------
+        :
+            The updated record
+
+        Raises
+        ------
+        RecordNotWritableError
+            The record is published, so its access cannot be changed this way.
+
+        RecordNotFoundError
+            There is no record with this ID
+
+        AccessNotPermittedError
+            Zenodo will not let this account set the access asked for,
+            see [`Access`][openscm_zenodo.zenodo.Access]
+        """
+        record_id = get_record_id(record_id)
+
+        try:
+            current = self._get_draft_document(record_id)
+
+        except ZenodoHTTPError as exc:
+            self._raise_for_missing_draft(exc, record_id=record_id, what="access")
+
+        logger.info(f"Updating the access of record {record_id!r}")
+        access_json = access.to_json()
+        logger.debug(f"New access: {access_json}")
+
+        # Zenodo's own serialisation of the metadata goes back out again,
+        # rather than a round trip through `Metadata`, because the point of
+        # this call is that the metadata does not change.
+        body = {
+            "metadata": current.raw.get("metadata", {}),
+            "access": access_json,
+        }
+
+        try:
+            response_json = self._request(
+                f"/api/records/{record_id}/draft",
+                method="PUT",
+                requires_auth=True,
+                headers={"Accept": INVENIORDM_JSON_ACCEPT},
+                json=body,
+                description=f"update the access of record {record_id!r}",
+            ).json()
+
+        except ZenodoHTTPError as exc:
+            self._raise_for_refused_access(exc, record_id=record_id)
+
+        updated = Record.from_json(response_json)
+
+        if warn_ignored:
+            self._warn_about_ignored(
+                response_json,
+                sent=body,
+                description=f"update the access of record {record_id!r}",
+            )
+
+        return updated
+
+    def _raise_for_refused_access(
+        self, exc: ZenodoHTTPError, *, record_id: str | RecordID
+    ) -> NoReturn:
+        """
+        Explain a refusal to set a record's access, if that is what happened
+
+        Parameters
+        ----------
+        exc
+            The error to look at
+
+        record_id
+            ID of the record whose access we were setting
+
+        Raises
+        ------
+        AccessNotPermittedError
+            Zenodo refused, naming the `access` field
+
+        ZenodoHTTPError
+            `exc`, if it refused for some other reason
+        """
+        reported = get_reported_errors(exc.response, fields=("access",))
+        if exc.response.status_code != HTTP_BAD_REQUEST or reported is None:
+            raise exc
+
+        raise AccessNotPermittedError(
+            str(record_id),
+            zenodo_domain=self.zenodo_domain_url,
+            reported=reported,
+        ) from exc
+
+    def reserve_or_get_doi(self, record_id: RecordIDLike) -> str:
+        """
+        Get a record's DOI, reserving one if it does not have one yet
+
+        The record is asked first, so a record which already has a DOI — one
+        reserved earlier, or minted by publishing — simply hands it back. That
+        is what makes this safe to call repeatedly, which Zenodo's API is not:
+        a second reservation via the Zenodo API
+        is a `400 A PID already exists for type doi`.
+
+        Parameters
+        ----------
+        record_id
+            ID of the record, or the record itself
+
+        Returns
+        -------
+        :
+            The DOI, e.g. `"10.5281/zenodo.4589756"`
+
+        Raises
+        ------
+        RecordNotWritableError
+            The record is published and somehow has no DOI,
+            so there is no draft to reserve one on
+
+        RecordNotFoundError
+            There is no record with this ID
+        """
+        record_id = get_record_id(record_id)
+
+        existing = self.get_record(record_id).doi
+        if existing is not None:
+            logger.info(f"Record {record_id!r} already has the DOI {existing!r}")
+
+            return existing
+
+        logger.info(f"Reserving a DOI for record {record_id!r}")
+
+        try:
+            response_json = self._request(
+                f"/api/records/{record_id}/draft/pids/doi",
+                method="POST",
+                requires_auth=True,
+                headers={"Accept": INVENIORDM_JSON_ACCEPT},
+                description=f"reserve a DOI for record {record_id!r}",
+            ).json()
+
+        except ZenodoHTTPError as exc:
+            if exc.response.status_code != HTTP_BAD_REQUEST:
+                self._raise_for_missing_draft(exc, record_id=record_id, what="DOI")
+
+            # Somebody reserved one between our read and our write. Rather than
+            # reading Zenodo's complaint, we ask the record again.
+            reserved_meanwhile = self._get_draft_document(record_id).doi
+            if reserved_meanwhile is None:
+                raise
+
+            return reserved_meanwhile
+
+        reserved = Record.from_json(response_json).doi
+        if reserved is None:
+            msg = (
+                f"Zenodo accepted our request to reserve a DOI "
+                f"for record {record_id!r}, but the record it sent back "
+                f"does not have one. Response: {response_json}"
+            )
+
+            raise ZenodoError(msg)
+
+        logger.info(f"Reserved the DOI {reserved!r} for record {record_id!r}")
+
+        return reserved
 
     def _published_record_exists(self, record_id: str | RecordID) -> bool:
         """
@@ -3859,7 +4368,12 @@ class ZenodoClient:
 @define
 class ZenodoInteractor:
     """
-    Class for interacting with Zenodo
+    Class for interacting with Zenodo, over the legacy deposit API
+
+    **TO BE DELETED** when the CLI is trimmed (Part 8), along with every
+    `*_legacy` function. It is kept only so that the current command-line
+    interface keeps working while the rewrite lands.
+    Use [`ZenodoClient`][openscm_zenodo.zenodo.ZenodoClient] instead.
     """
 
     token: str | None = field(default=None, repr=lambda value: "***")
@@ -4789,7 +5303,7 @@ def retrieve_metadata_legacy(
     This is the pre-InvenioRDM implementation,
     so the metadata comes back in the legacy schema.
     It is kept only so that the command-line interface keeps working
-    while the rewrite lands, and goes when the CLI is trimmed (Part 8).
+    while the rewrite lands: TO BE DELETED when the CLI is trimmed (Part 8).
     Use [`retrieve_metadata`][openscm_zenodo.zenodo.retrieve_metadata] instead.
 
     Parameters
@@ -4878,6 +5392,12 @@ def retrieve_bibtex_entry(
 ) -> str:
     r"""
     Retrieve the bibtext entry associated with a given deposition ID
+
+    This is the pre-InvenioRDM implementation.
+    It is kept only so that the command-line interface keeps working
+    while the rewrite lands: TO BE DELETED when the CLI is trimmed (Part 8).
+    Use [`retrieve_citation`][openscm_zenodo.zenodo.retrieve_citation] instead,
+    which reaches every format Zenodo exports.
 
     Parameters
     ----------
@@ -5121,7 +5641,7 @@ def create_new_version_legacy(  # noqa: PLR0913
 
     This is the pre-InvenioRDM implementation.
     It is kept only so that the command-line interface keeps working
-    while the rewrite lands, and goes when the CLI is trimmed (Part 8).
+    while the rewrite lands: TO BE DELETED when the CLI is trimmed (Part 8).
     Use
     [`create_or_get_new_version`][openscm_zenodo.zenodo.create_or_get_new_version]
     instead.
@@ -5194,9 +5714,18 @@ def create_new_version_legacy(  # noqa: PLR0913
     return str(new_deposition_id)
 
 
-def get_reserved_doi(zenodo_record_response: requests.models.Response) -> str:
+def get_reserved_doi_legacy(zenodo_record_response: requests.models.Response) -> str:
     """
-    Get the reserved DOI from a Zenodo record response
+    Get the reserved DOI from a Zenodo record response, using the legacy API
+
+    This is the pre-InvenioRDM implementation,
+    so it reads the legacy schema's `metadata.prereserve_doi`.
+    It is kept only so that the command-line interface keeps working
+    while the rewrite lands: TO BE DELETED when the CLI is trimmed (Part 8).
+    A record's DOI, reserved or minted, is now
+    [`Record.doi`][openscm_zenodo.zenodo.Record.doi], and
+    [`reserve_or_get_doi`][openscm_zenodo.zenodo.ZenodoClient.reserve_or_get_doi]
+    is how to reserve one.
 
     We think that this works
     with basically any response related to retrieving a record from Zenodo,

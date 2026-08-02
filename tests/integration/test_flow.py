@@ -1,5 +1,12 @@
 """
 Test our Zenodo interaction flows
+
+**TO BE DELETED.** This is the end-to-end flow through `ZenodoInteractor` and
+the legacy deposit API, which goes when the CLI is trimmed (plan Part 8). The
+same ground is covered on the InvenioRDM API by
+`test_records_integration.py`, `test_upload_files_integration.py`,
+`test_versions_integration.py` and `test_publish_integration.py`, so delete this
+file rather than porting it.
 """
 
 from __future__ import annotations
@@ -13,7 +20,18 @@ from pathlib import Path
 import pytest
 import requests
 
-from openscm_zenodo.zenodo import ZenodoDomain, ZenodoInteractor, get_reserved_doi
+from openscm_zenodo.zenodo import (
+    ZenodoDomain,
+    ZenodoInteractor,
+    get_reserved_doi_legacy,
+)
+
+
+@pytest.fixture(autouse=True)
+def _token_where_the_legacy_code_looks(legacy_zenodo_token):
+    """
+    These tests read `ZENODO_TOKEN` directly, see `legacy_zenodo_token`
+    """
 
 
 @pytest.mark.zenodo_token
@@ -78,7 +96,7 @@ def test_default_end_to_end_flow(pre_existing_draft, test_data_dir, tmpdir):
     assert isinstance(update_metadata_response, requests.models.Response)
 
     # Just a test that this exists really, but handy trick to know
-    reserved_doi = get_reserved_doi(update_metadata_response)
+    reserved_doi = get_reserved_doi_legacy(update_metadata_response)
     assert "10.5281/zenodo" in reserved_doi
 
     # Upload files

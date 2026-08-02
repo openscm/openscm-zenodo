@@ -3,6 +3,13 @@ Tests of how the command-line interface resolves tokens
 
 These do not hit Zenodo:
 the interactor is replaced so we can see the token it was handed.
+
+**TO BE REWRITTEN, not deleted** (plan Part 8). What these test — the
+`--token` → `ZENODO_SANDBOX_TOKEN` → `ZENODO_TOKEN` → `.env` precedence chain —
+is behaviour the trimmed CLI keeps, so the coverage has to survive. What has to
+change is the scaffolding: every test drives `remove-files`, which is removed,
+and patches `ZenodoInteractor`, which goes with it. Point them at a retained
+command and at `ZenodoClient` instead.
 """
 
 from __future__ import annotations

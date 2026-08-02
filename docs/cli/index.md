@@ -103,7 +103,7 @@ $ openscm-zenodo update-metadata [OPTIONS] DEPOSITION_ID
 
 **Options**:
 
-* `--metadata-file FILE`: Path to the `.json` file containing the metadata to use for this version. The `.json` file should have a single &#x27;metadata&#x27; key, which points to a dictionary of key : value pairs.For futher information about the required form, see the docstring of [`update_metadata`]. To get an example, see the docstring of [`retrieve_metadata`].  [required]
+* `--metadata-file FILE`: Path to the `.json` file containing the metadata to use for this version. The `.json` file should have a single &#x27;metadata&#x27; key, which points to a dictionary of key : value pairs.For futher information about the required form, see the docstring of [`update_metadata`]. To get an example, see the docstring of [`retrieve_metadata_legacy`].  [required]
 * `--token TEXT`: Zenodo token to use for this interaction. If not supplied, we use, in order of preference: the `ZENODO_SANDBOX_TOKEN` environment variable (only when using the sandbox domain), then the `ZENODO_TOKEN` environment variable, then any value found in a `.env` file (see `--env-file`). For more information about generating tokens, see the &#x27;Creating a personal access token&#x27; header of https://developers.zenodo.org/#authentication.
 * `--zenodo-domain [https://zenodo.org|https://sandbox.zenodo.org]`: The zenodo domain with which you want to interact.  [default: https://zenodo.org]
 * `--reserve-doi`: Reserve a DOI while updating the metadata. This will overwrite any value in the metadata file supplied.
@@ -171,7 +171,7 @@ $ openscm-zenodo create-new-version [OPTIONS] ANY_DEPOSITION_ID [FILES_TO_UPLOAD
 **Options**:
 
 * `--token TEXT`: Zenodo token to use for this interaction. If not supplied, we use, in order of preference: the `ZENODO_SANDBOX_TOKEN` environment variable (only when using the sandbox domain), then the `ZENODO_TOKEN` environment variable, then any value found in a `.env` file (see `--env-file`). For more information about generating tokens, see the &#x27;Creating a personal access token&#x27; header of https://developers.zenodo.org/#authentication.
-* `--metadata-file FILE`: Path to the `.json` file containing the metadata to use for this version. The `.json` file should have a single &#x27;metadata&#x27; key, which points to a dictionary of key : value pairs.For futher information about the required form, see the docstring of [`update_metadata`]. To get an example, see the docstring of [`retrieve_metadata`].
+* `--metadata-file FILE`: Path to the `.json` file containing the metadata to use for this version. The `.json` file should have a single &#x27;metadata&#x27; key, which points to a dictionary of key : value pairs.For futher information about the required form, see the docstring of [`update_metadata`]. To get an example, see the docstring of [`retrieve_metadata_legacy`].
 * `--publish`: Publish the newly created version after creating it and uploading the files
 * `--zenodo-domain [https://zenodo.org|https://sandbox.zenodo.org]`: The zenodo domain with which you want to interact.  [default: https://zenodo.org]
 * `--n-threads INTEGER`: Number of threads to use for parallel processing  [default: 4]

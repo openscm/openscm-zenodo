@@ -1,5 +1,11 @@
 """
 Integration tests of our command-line interface
+
+**TO BE DELETED.** Every test here drives a command which the CLI trim removes
+(`create-new-version`, `update-metadata`, `remove-files`), through the legacy
+deposit API. Plan Part 8 replaces this file with tests of the three retained
+commands (`upload-files`, `download-files`, `retrieve-citation`), so delete it
+then rather than porting it.
 """
 
 from __future__ import annotations
@@ -23,6 +29,13 @@ try:
 except TypeError:
     # New typer version, no mix_stderr argument
     runner = CliRunner()
+
+
+@pytest.fixture(autouse=True)
+def _token_where_the_legacy_code_looks(legacy_zenodo_token):
+    """
+    The legacy CLI declares `envvar="ZENODO_TOKEN"`, see `legacy_zenodo_token`
+    """
 
 
 @pytest.mark.zenodo_token

@@ -13,9 +13,12 @@ from openscm_zenodo.exceptions import (
     MissingTokenError,
     ZenodoError,
     ZenodoHTTPError,
+    ZenodoWarning,
     format_error_body,
     format_field_error,
 )
+from openscm_zenodo.metadata import Metadata
+from openscm_zenodo.zenodo import ZenodoClient
 
 
 @pytest.mark.parametrize(
@@ -134,3 +137,33 @@ def test_zenodo_http_error_without_a_request(make_response):
     response.request = None
 
     assert "? https://zenodo.org/api/records/1234" in str(ZenodoHTTPError(response))
+
+
+def test_warnings_point_at_the_caller(
+    recwarn, make_recording_session, make_response, no_token_in_env
+):
+    """
+    A warning names the line which led to it, not a line of ours
+
+    The number of our own frames between a public method and `warn_zenodo` is
+    ours to change, so it cannot be something a caller has to count. This is the
+    test that adding or removing a helper does not move the warning.
+    """
+    updated = make_response(
+        json_body={
+            "id": 1234,
+            "is_draft": True,
+            "is_published": False,
+            "parent": {"id": "1230"},
+            "metadata": {},
+        }
+    )
+    client = ZenodoClient(token="a-token", session=make_recording_session([updated]))  # noqa: S106
+
+    client.update_metadata("1234", Metadata(resource_type="not-a-resource-type"))
+
+    # One warning is raised before the request and one after, through different
+    # numbers of our frames, and both have to land in the same place: here.
+    ours = [w for w in recwarn if issubclass(w.category, ZenodoWarning)]
+    assert len(ours) == 2
+    assert [w.filename for w in ours] == [__file__, __file__]

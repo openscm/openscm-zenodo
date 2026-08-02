@@ -7,13 +7,14 @@ See https://docs.pytest.org/en/7.1.x/reference/fixtures.html#conftest-py-sharing
 from __future__ import annotations
 
 import json
-import os
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 import pytest
 import requests
 from loguru import logger
+
+from openscm_zenodo.zenodo import ZenodoDomain, get_token_env_vars, resolve_token
 
 if TYPE_CHECKING:
     import _pytest
@@ -29,13 +30,28 @@ def test_data_dir() -> Path:
     return TEST_DATA_ROOT_DIR
 
 
-ZENODO_TOKEN_AVAILABLE = "ZENODO_TOKEN" in os.environ
+ZENODO_TOKEN_ENV_VARS = get_token_env_vars(ZenodoDomain.sandbox)
+"""
+Environment variables a token for the tests which write can come from
+
+Everything which writes goes to the sandbox, so this asks the library where a
+*sandbox* token comes from rather than naming a variable itself. Naming one
+would mean the skip condition could disagree with `resolve_token` about whether
+we have a token, which shows up as the whole suite skipping in silence.
+"""
+
+ZENODO_TOKEN_AVAILABLE = (
+    resolve_token(zenodo_domain=ZenodoDomain.sandbox).token is not None
+)
 
 
 def pytest_runtest_setup(item: _pytest.python.Function) -> None:
     for mark in item.iter_markers():
         if mark.name == "zenodo_token" and not ZENODO_TOKEN_AVAILABLE:
-            pytest.skip("`ZENODO_TOKEN` environment variable not set")
+            pytest.skip(
+                "no Zenodo sandbox token: set "
+                + " or ".join(f"`{var}`" for var in ZENODO_TOKEN_ENV_VARS)
+            )
 
 
 def build_response(  # noqa: PLR0913

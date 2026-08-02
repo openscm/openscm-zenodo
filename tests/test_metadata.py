@@ -351,8 +351,11 @@ def test_validate_of_complete_metadata_is_quiet():
         pytest.param("access_right", "open", "access", id="access_right"),
         pytest.param("license", "cc-by-4.0", "rights", id="license"),
         pytest.param("keywords", ["climate"], "subjects", id="keywords"),
-        pytest.param("prereserve_doi", True, "reserve_doi", id="prereserve_doi"),
+        pytest.param("prereserve_doi", True, "reserve_or_get_doi", id="prereserve_doi"),
         pytest.param("doi", "10.5281/zenodo.1", "pids", id="doi"),
+        pytest.param(
+            "communities", [{"identifier": "zenodo"}], "not support", id="communities"
+        ),
     ),
 )
 def test_legacy_metadata_is_refused_with_the_translation(key, value, expected):
