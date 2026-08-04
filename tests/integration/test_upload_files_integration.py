@@ -7,6 +7,8 @@ is the difference between `upload_files` and `mirror_files`.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from openscm_zenodo.checksums import get_file_md5
@@ -15,11 +17,11 @@ pytestmark = pytest.mark.zenodo_token
 
 
 @pytest.fixture
-def local_files(tmp_path):
+def local_files(in_a_working_directory):
     """Two local files to upload"""
     res = []
     for name, contents in (("a.txt", "contents of a\n"), ("b.txt", "contents of b\n")):
-        path = tmp_path / name
+        path = Path(name)
         path.write_text(contents)
         res.append(path)
 
@@ -124,10 +126,12 @@ def test_delete_all_files(sandbox_client, draft_record_id, local_files):
 
 
 @pytest.mark.parametrize("n_threads", (1, 4))
-def test_upload_files_in_parallel(sandbox_client, draft_record_id, tmp_path, n_threads):
+def test_upload_files_in_parallel(
+    sandbox_client, draft_record_id, in_a_working_directory, n_threads
+):
     paths = []
     for i in range(4):
-        path = tmp_path / f"parallel-{i}.txt"
+        path = Path(f"parallel-{i}.txt")
         path.write_text(f"contents of file {i}\n")
         paths.append(path)
 

@@ -44,6 +44,7 @@ from openscm_zenodo.zenodo import (
     retrieve_metadata,
     retrieve_metadata_legacy,
 )
+from openscm_zenodo.zipping import zip_files
 
 logger.disable("openscm_zenodo")
 
@@ -84,4 +85,5 @@ __all__ = [
     "retrieve_citation",
     "retrieve_metadata",
     "retrieve_metadata_legacy",
+    "zip_files",
 ]

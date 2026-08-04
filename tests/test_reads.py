@@ -11,11 +11,11 @@ import pytest
 from openscm_zenodo.exceptions import (
     DraftMetadataEditsNotFoundError,
     DraftRecordDraftMetadataEditsError,
+    OpenSCMZenodoWarning,
     PublishedRecordDraftError,
     RecordNotFoundError,
     UnknownCitationStyleError,
     ZenodoHTTPError,
-    ZenodoWarning,
 )
 from openscm_zenodo.metadata import Metadata
 from openscm_zenodo.zenodo import (
@@ -511,7 +511,7 @@ def test_get_citation_style_ignored_with_a_warning(
     session = make_recording_session([make_response(text="@dataset{...}")])
     client = ZenodoClient(session=session)
 
-    with pytest.warns(ZenodoWarning, match="Ignoring style"):
+    with pytest.warns(OpenSCMZenodoWarning, match="Ignoring style"):
         client.get_citation(RECORD_ID, fmt=CitationFormat.bibtex, style="ieee")
 
     (call,) = session.calls
@@ -543,7 +543,7 @@ def test_get_citation_style_we_have_not_checked(
     session = make_recording_session([make_response(text="A citation")])
     client = ZenodoClient(session=session)
 
-    with pytest.warns(ZenodoWarning, match="not checked the citation style"):
+    with pytest.warns(OpenSCMZenodoWarning, match="not checked the citation style"):
         client.get_citation(
             RECORD_ID, fmt=CitationFormat.citation, style="some-journal-style"
         )

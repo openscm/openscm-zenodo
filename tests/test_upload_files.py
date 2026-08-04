@@ -8,11 +8,12 @@ The behaviour that matters most here is the difference between the two:
 from __future__ import annotations
 
 import hashlib
+from pathlib import Path
 
 import pytest
 
 from openscm_zenodo.exceptions import RecordNotFoundError, ZenodoHTTPError
-from openscm_zenodo.zenodo import ZenodoClient, ZenodoDomain
+from openscm_zenodo.zenodo import ZenodoClient, ZenodoDomain, get_upload_filenames
 
 RECORD_ID = "1234"
 DRAFT_FILES_URL = f"https://zenodo.org/api/records/{RECORD_ID}/draft/files"
@@ -24,11 +25,19 @@ def md5_of(contents):
 
 
 @pytest.fixture
-def local_files(tmp_path):
-    """Two local files, keyed by name, with their contents"""
+def local_files(tmp_path, monkeypatch):
+    """
+    Two local files, keyed by name, with their contents
+
+    These sit in the working directory, so uploading them strips no path and
+    the tests below are not about that. `test_paths.py` covers what happens
+    when a path is stripped.
+    """
+    monkeypatch.chdir(tmp_path)
+
     res = {}
     for name, contents in (("a.txt", b"contents of a"), ("b.txt", b"contents of b")):
-        path = tmp_path / name
+        path = Path(name)
         path.write_bytes(contents)
         res[name] = path
 
@@ -458,7 +467,9 @@ def test_delete_all_files(fake_zenodo):
 def test_diff_files(fake_zenodo, local_files):
     client, _ = fake_zenodo({"a.txt": b"contents of a", "stale.txt": b"stale"})
 
-    diff = client._diff_files(RECORD_ID, list(local_files.values()))
+    diff = client._diff_files(
+        RECORD_ID, get_upload_filenames(list(local_files.values()))
+    )
 
     assert diff.unchanged == (local_files["a.txt"],)
     assert list(diff.to_upload) == [local_files["b.txt"]]
@@ -478,7 +489,7 @@ def test_diff_files_ignores_local_directories(fake_zenodo, tmp_path):
 
     client, _ = fake_zenodo({"a.txt": b"contents of a"})
 
-    diff = client._diff_files(RECORD_ID, [path])
+    diff = client._diff_files(RECORD_ID, get_upload_filenames([path]))
 
     assert diff.unchanged == (path,)
     assert diff.to_delete == ()

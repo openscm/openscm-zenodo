@@ -9,6 +9,8 @@ because publishing cannot be undone.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from openscm_zenodo.exceptions import (
@@ -132,7 +134,7 @@ def test_publish_with_incomplete_metadata(sandbox_client, draft_record_id):
 
 
 def test_publisher_is_only_required_at_publish(
-    sandbox_client, draft_record_id, tmp_path, build_metadata
+    sandbox_client, draft_record_id, in_a_working_directory, build_metadata
 ):
     """
     Zenodo's last-round complaint is the one we would otherwise be caught by
@@ -140,7 +142,7 @@ def test_publisher_is_only_required_at_publish(
     Metadata which is complete apart from `publisher` is accepted by every
     endpoint until the irreversible one, which is exactly why we check first.
     """
-    path = tmp_path / "a-file.txt"
+    path = Path("a-file.txt")
     path.write_text("a record needs a file to be publishable\n")
     sandbox_client.upload_file(draft_record_id, path, progress=False)
 

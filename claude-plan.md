@@ -1100,8 +1100,13 @@ text below, all deliberate:
   they are easier to enumerate as tests than to read out of a pattern.
 - **Warnings go through `warnings.warn`, not the logger.** The logger is
   disabled until a caller enables it, so a warning about Zenodo quietly
-  discarding a field never reached the person who most needed it. They carry a
-  `ZenodoWarning` category so they can be silenced or promoted as a group.
+  discarding a field never reached the person who most needed it. They carry an
+  `OpenSCMZenodoWarning` category so they can be silenced or promoted as a group,
+  raised by `warn_openscm_zenodo`. Both are named for us rather than for Zenodo,
+  breaking the `Zenodo*` pattern the rest of the package follows on purpose:
+  `ZenodoClient` is a client *for* Zenodo and `ZenodoHTTPError` is an error
+  *from* Zenodo, but several of these warnings are our own commentary rather
+  than anything Zenodo said.
 - **Vocabulary checks cover every vocabulary field**, not just `resource_type`:
   `find_unknown_vocabulary_values` also checks identifier schemes and relation
   types, and names where each unrecognised value is.
@@ -1598,7 +1603,62 @@ with another format logs a warning.
 
 ---
 
-## Part 11 — Local paths are stripped; zipping to preserve structure
+## Part 11 — Local paths are stripped; zipping to preserve structure — ✅ IMPLEMENTED
+
+**Done** (the remainder of sequencing step 5). `warn_about_stripped_paths`,
+`get_upload_filenames`, `DuplicateFileKeyError`, the `warn_path_stripped` flag on
+`upload_file` / `upload_files` / `mirror_files`, and a new
+`openscm_zenodo/zipping.py` (`zip_files`, `get_base_dir`, `get_archive_names`)
+behind `ZenodoClient.upload_files_as_zip`. Unit tests in `tests/test_paths.py`
+and `tests/test_zipping.py`, live sandbox tests in
+`tests/integration/test_zip_integration.py`. Deltas from the text below:
+
+- **The warning goes through `warn_openscm_zenodo`, not `logger.warning`.** 11.1 predates
+  the Part 6 decision that anything a caller needs to hear goes through
+  `warnings.warn`, because the logger is disabled until someone turns it on. A
+  file quietly losing its directories is the same class of problem as a field
+  Zenodo quietly discards.
+- **One warning per call, not per file.** The plan said one per affected file;
+  they are collected into a single warning listing each. It also has to be raised
+  from the public method rather than from `upload_file`, because the per-file
+  uploads happen in worker threads, and a warning raised in a thread is
+  attributed to that thread's stack — which is ours, not the caller's.
+- **`upload_files_as_zip` has no `warn_path_stripped`.** Nothing of the caller's
+  is stripped: the archive is one file, and keeping the structure is the point of
+  the method. Internally it passes `warn_path_stripped=False`, because the
+  archive's temporary directory is ours and would otherwise warn about itself.
+- **A file named twice is not a collision.** `get_upload_filenames` compares
+  resolved paths, so `[p, p]` (or `p` and `./p`) is one upload rather than a
+  `DuplicateFileKeyError`. Only genuinely different files sharing a basename are
+  refused, which is the case with no right answer.
+- **`get_archive_names` has no collision check at all**, and 11.3's is deleted:
+  every path keeps its directories, so two different files under one `base_dir`
+  always land in different places. The check would have been unreachable code.
+- **`keep_zips` is `keep_zip_dir`, and is a directory.** As a file path it would
+  have fought with `zip_name` over what the archive is called.
+- **The mapping form of `upload_files_as_zip` is dropped** — one archive per
+  call. Grouping is `zip_files` twice and `upload_files` once, which is two lines
+  and leaves the method with a single calling convention. The sketched
+  `**upload_kwargs` passthrough went with it, in favour of explicit parameters.
+- **The warning fires whenever a path has a parent**, as written below, rather
+  than only when several directories are merged into one namespace. Considered
+  and rejected: the narrower rule is quieter (it does not fire on
+  `upload_files(record, list(out.glob("*.nc")))`) but "we warned you the
+  directory is gone" is the honest statement, and the flag is there for anyone
+  who does not want to hear it.
+- **The pinned values are a `DeterministicZipValues`**, not hard-coded
+  constants: `deterministic` takes `True`, `False`, or an instance carrying a
+  timestamp, permissions and host system. `True` builds the default instance, so
+  the common call is unchanged. The three defaults are
+  `ZIP_TIMESTAMP_DEFAULT` / `ZIP_PERMISSIONS_DEFAULT` /
+  `ZIP_CREATE_SYSTEM_DEFAULT`. `create_system` has to be pinned alongside the
+  permissions, because it is what decides whether they are read back at all.
+- **`get_base_dir` only reports a relative directory when every path it was
+  given was relative**, in which case "relative to the working directory" is
+  what a relative path already means rather than a guess. Any absolute path in
+  the input and the answer comes back absolute. Cosmetic either way:
+  `get_archive_names` absolutises both sides before comparing, so this only
+  affects what error messages and the doctest read like.
 
 **Zenodo has no directories.** InvenioRDM identifies a file by a flat name, and
 Zenodo's own guidance (already quoted in `upload_file_to_bucket_url`'s docstring)
@@ -1658,7 +1718,7 @@ def zip_files(
     *,
     base_dir: Optional[Path] = None,     # paths inside the zip are relative to this
     compression: int = zipfile.ZIP_DEFLATED,
-    deterministic: bool = True,          # see below
+    deterministic: bool | DeterministicZipValues = True,  # see below
 ) -> Path:
     """Zip `paths`, preserving their structure relative to `base_dir`."""
 ```
@@ -2171,7 +2231,7 @@ predicted held. Deltas from the text below:
   twice while writing this, and it cannot be right in general: the number depends
   on how many of our helpers happen to sit between the public method and the
   warning, so it changes whenever one is added — and letting a caller correct it
-  would mean a `stacklevel` parameter on every public method. `warn_zenodo` now
+  would mean a `stacklevel` parameter on every public method. `warn_openscm_zenodo` now
   walks the stack to the first frame outside the package, which is the thing we
   actually meant. Same approach as pandas' `find_stack_level`; **replace it with
   `warnings.warn(skip_file_prefixes=...)` when the Python floor reaches 3.12.**
@@ -2326,83 +2386,56 @@ All three assert that access can only be set at creation, which 14.1 disproves:
 
 ---
 
-## Suggested sequencing
+## Sequencing — the source of truth for what is left
 
-**Where we are.** Steps 0, 1, 2, 3, 4, 6 and 7 are done, and step 5 is done apart
-from Part 11. The outstanding work is **Part 11** (the remainder of step 5),
-**2b**, **8** and **9**. They were taken out of order: uploads, mirror, versions and
-download (Parts 2–5) landed before the read paths and before the metadata
-schema, so the transport was exercised by the file work instead. Nothing
-downstream broke as a result — `update_metadata` landed as a pass-through with
-the schema explicitly deferred to Part 6, and step 3 then did the schema work it
-always did. The outstanding steps, in the order to take them, are: **4**, the
-**Part 11** remainder of 5, **2b**, **8** and **9**.
+**This section is authoritative.** Each part above carries its own
+"✅ IMPLEMENTED" note with the deltas; this is the index of what is done, what is
+not, and what to do next.
 
-Step 4 is now smaller than it was: `create_or_get_edited_metadata_draft`,
-`update_metadata` and
-`publish` landed with step 3, because the metadata decisions (13.3) are what they
-turn on. What is left of it is `create_record`, `reserve_doi`, and confirming
-`new_version` / `import_files` / `delete_files` need nothing further.
+### Outstanding, in the order to take them
 
-0. ~~**`copier update` (Part 0)** — refresh the template from `v0.14.2`, keep
-   `include_cli: true`, fix `project_description_short`, then re-lock and run
-   `make check`. Own commit, before any library work.~~ ✅ **DONE** (commit
-   `72c0ecc`, template now `v0.15.4`).
-1. ~~**Client + transport foundation** — new `ZenodoClient` skeleton, injectable
-   session + public `build_session`, `urllib3.Retry` adapter, `_request`,
-   exceptions module, Bearer auth, `resolve_token` precedence chain and the
-   `RecordID`/`ParentID` `NewType`s (Part 1.1).~~ ✅ **DONE** — see the note at
-   the top of 1.1.
-2. ~~**Read paths** — `list_files` (landed with Part 3), plus `get_published`,
-   `get_draft`, `get_metadata`, `get_citation` (Part 10). Cheap, and they
-   exercise the transport.~~ ✅ **DONE** — plus `get_parent_id`, which is the
-   same kind of read. See the note at the top of Part 10 for the citation work,
-   and 1.2.2 below for the record/metadata reads.
-2b. **File-write guard (Part 13.5, steps 1–4)** — `RecordNotWritableError` and
-   `_assert_writable` on the file-write methods, plus the race-window fixes. Small
-   and self-contained, and **not urgent**: Zenodo already refuses these writes
-   (13.2), so this is hardening and error quality. Slot it in wherever convenient;
-   it does not gate step 3.
-3. ~~**Metadata (Part 6)** — schema rewrite + `load_metadata` + validation.
-   Biggest item; do it early so everything downstream uses the right shape.
-   Part 13.3 — the `is_draft(files_based=False)` `NotImplementedError`, and
-   whether `update_metadata`/`publish` may target a published record — is
-   settled here.~~ ✅ **DONE** — plus the typed `Record`,
-   `create_or_get_edited_metadata_draft` and `has_edited_metadata_draft`.
-   See the note at the top of Part 6 and the decisions in 13.3.
-4. ~~**Write paths** — `create_record` and `reserve_doi` (Part 7), plus
-   `update_access` and `Access.to_json` (Part 14).~~ ✅ **DONE** — `create_record`,
-   `update_access`, `reserve_or_get_doi` and `was_field_sent`. See the notes at
-   the top of Parts 7 and 14. ~~`get_or_create_draft`
-   (Part 1.2.1), `update_metadata`, `publish`~~ ✅ **DONE with step 3**;
-   `new_version` / `import_files` / `delete_files` landed with Parts 3–4.
-   The Part 12.2 endpoint matrix is now fully ticked.
-5. **Uploads (Parts 2, 11)** — ~~the init→content→commit `upload_file`,
-   `tenacity` upload retry, checksum verification, `upload_files` parallelism,
-   the shared `leave=False` progress-bar helper (Part 2.1)~~ ✅ **DONE** (Part 2,
-   and the parallelism/progress-bar allocator with Part 3). **Still outstanding:
-   Part 11** — the path-stripping warning + basename-collision error
-   (11.1–11.2), and `zipping.py` + `upload_files_as_zip` (11.3).
-6. ~~**Mirror + versions (Parts 3–4)** — `mirror_files`, then
-   `create_new_version` with `FilesMode`.~~ ✅ **DONE** — see the notes at the
-   top of Parts 3 and 4.
-7. ~~**Download (Part 5)** — `list_files(draft=...)`, `download_file` /
-   `download_files` / `retrieve_files`. Reuses the session, checksum helper,
-   progress-bar helper and `tenacity` retry from step 5, so it slots in cheaply
-   once uploads exist.~~ ✅ **DONE** — see the notes at the top of Part 5
-   (`list_files` has no `draft` argument, and the helper is `download_files`).
-8. **Trim the CLI + packaging/docs (Parts 8–9).** The three retained commands are
-   thin wrappers, so they land last, once `upload_files`, `download_files` and
-   `get_citation` all exist.
-9. **Live-API integration suite (Part 12).** Grow it *alongside* steps 2–8 —
-   each endpoint gets its live test as it is written, not in a batch at the end.
-   Step 9 is just the final sweep: confirm the Part 12.2 matrix is fully ticked,
-   add the scenario tests, and wire up the scheduled CI run.
+| # | Work | Why it is next |
+|---|---|---|
+| **8** | **Trim the CLI + packaging/docs (Parts 8–9)** | The three retained commands (`upload-files`, `download-files`, `retrieve-citation`) are thin wrappers over methods which now all exist, so nothing blocks it. It also removes `ZenodoInteractor` and everything marked `TO BE DELETED` (§8.4), which is the bulk of the remaining diff. |
+| **2b** | **File-write guard (13.5, steps 1–4)** | `_assert_writable` on the file-write methods, plus the race-window fixes. **Not urgent**: 13.2 establishes that Zenodo already refuses every file write against a published record, so this is hardening and error quality. Can land either side of step 8. |
+| **9** | **Live-API suite sweep (Part 12)** | The 12.2 endpoint matrix is already fully ticked, so what is left is the scenario tests in 12.3 and wiring up the scheduled CI run — the standing guard against Zenodo changing under us. Do it last, once the CLI is settled. |
 
-Step 0 settles the scaffolding; steps 1–2 stand up the new transport; step 3
-de-risks the schema early; 4–6 build the write/upload/version features on it;
-7–8 finish the breaking release; step 9 is the standing guard against Zenodo
-changing under us.
+### Done
+
+| # | Work | Where the write-up is |
+|---|---|---|
+| 0 | `copier update` (Part 0) | commit `72c0ecc`, template now `v0.15.4` |
+| 1 | Client + transport foundation (Part 1.1) | note at the top of 1.1 |
+| 2 | Read paths — `get_published`, `get_draft`, `get_record`, `get_metadata`, `get_parent_id`, `get_citation` (Parts 1.2.2, 10) | 1.2.2, and the top of Part 10 |
+| 3 | Metadata schema, `Record`, in-place metadata edits (Parts 6, 13.3) | top of Part 6, decisions in 13.3 |
+| 4 | Write paths — `create_record`, `update_access`, `reserve_or_get_doi` (Parts 7, 14) | tops of Parts 7 and 14 |
+| 5 | Uploads — `upload_file`, retry, checksums, progress bars (Part 2); path stripping, collisions, zipping (Part 11) | tops of Parts 2 and 11 |
+| 6 | Mirror + versions — `mirror_files`, `create_or_get_new_version`, `FilesMode` (Parts 3–4) | tops of Parts 3 and 4 |
+| 7 | Download — `download_file`, `download_files` (Part 5) | top of Part 5 |
+
+They were taken out of order: uploads, mirror, versions and download (Parts 2–5)
+landed before the read paths and before the metadata schema, so the transport was
+exercised by the file work instead. Nothing downstream broke as a result —
+`update_metadata` landed as a pass-through with the schema explicitly deferred to
+Part 6, and step 3 then did the schema work it always did.
+
+### Two things which are decided and will not be built
+
+- **Communities** — see "Explicitly out of scope". A capability the legacy API
+  had, deliberately dropped, and called out in the migration guide.
+- **`files.enabled=false`** (metadata-only records) — Zenodo refuses it for
+  ordinary accounts, and refuses it quietly, so there is no parameter for it
+  (14.4).
+
+### Open, if anyone wants them
+
+- **`delete_record`** — a record can be created through the public API but not
+  removed through it, so the test fixtures still delete through `_request`
+  (Part 14's note). It is the one irreversible-ish operation the library would
+  gain, so it deserves its own decision rather than a drive-by addition.
+- **`skip_file_prefixes`** — replace the frame-walking `stacklevel` in
+  `warn_openscm_zenodo` with the standard library's version when the supported Python
+  floor reaches 3.12.
 
 ---
 

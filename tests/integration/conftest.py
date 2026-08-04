@@ -68,6 +68,19 @@ so a record can be created with less than this.
 
 
 @pytest.fixture
+def in_a_working_directory(tmp_path, monkeypatch):
+    """
+    Run a test in its own directory
+
+    Files to upload can then be created under bare names, so uploading them
+    strips no path and does not warn about it.
+    """
+    monkeypatch.chdir(tmp_path)
+
+    return tmp_path
+
+
+@pytest.fixture
 def sandbox_client():
     """A client pointed at the Zenodo sandbox"""
     with ZenodoClient(zenodo_domain=ZenodoDomain.sandbox) as client:

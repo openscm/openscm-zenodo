@@ -12,9 +12,9 @@ import json
 import pytest
 
 from openscm_zenodo.exceptions import (
+    OpenSCMZenodoWarning,
     RecordNotFoundError,
     ZenodoHTTPError,
-    ZenodoWarning,
 )
 from openscm_zenodo.metadata import Metadata
 from openscm_zenodo.zenodo import (
@@ -229,7 +229,7 @@ def test_get_citation_style_zenodo_does_not_know(client):
     That answer has to stay readable.
     """
     with (
-        pytest.warns(ZenodoWarning, match="not checked the citation style"),
+        pytest.warns(OpenSCMZenodoWarning, match="not checked the citation style"),
         pytest.raises(ZenodoHTTPError, match="Citation string style not found"),
     ):
         client.get_citation(

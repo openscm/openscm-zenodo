@@ -7,11 +7,11 @@ from __future__ import annotations
 import pytest
 
 from openscm_zenodo.exceptions import (
+    OpenSCMZenodoWarning,
     RecordNotFoundError,
     RecordNotWritableError,
     ZenodoError,
     ZenodoHTTPError,
-    ZenodoWarning,
 )
 from openscm_zenodo.metadata import Creator, Metadata
 from openscm_zenodo.zenodo import (
@@ -151,7 +151,7 @@ def test_create_record_says_nothing_about_metadata(
 
     client.create_record()
 
-    assert [w for w in recwarn if issubclass(w.category, ZenodoWarning)] == []
+    assert [w for w in recwarn if issubclass(w.category, OpenSCMZenodoWarning)] == []
 
 
 def test_update_access_sends_the_metadata_back(client_and_session, make_response):
@@ -250,7 +250,7 @@ def test_update_access_warns_about_what_zenodo_ignored(
         ]
     )
 
-    with pytest.warns(ZenodoWarning, match="access.record"):
+    with pytest.warns(OpenSCMZenodoWarning, match="access.record"):
         client.update_access(RECORD_ID, Access())
 
 

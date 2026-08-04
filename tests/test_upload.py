@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import urllib.parse
+from pathlib import Path
 
 import pytest
 import requests
@@ -17,6 +18,7 @@ from openscm_zenodo.exceptions import (
     ChecksumMismatchError,
     FileTransferFailedError,
     MissingTokenError,
+    OpenSCMZenodoWarning,
     ZenodoHTTPError,
 )
 from openscm_zenodo.zenodo import ZenodoClient, should_retry_transfer
@@ -25,11 +27,17 @@ RECORD_ID = "1234"
 
 
 @pytest.fixture
-def to_upload(tmp_path):
-    """A file to upload, plus the MD5 of its contents"""
+def to_upload(tmp_path, monkeypatch):
+    """
+    A file to upload, plus the MD5 of its contents
+
+    It sits in the working directory, so uploading it strips no path. What
+    happens when one is stripped is `test_paths.py`'s subject.
+    """
+    monkeypatch.chdir(tmp_path)
     contents = b"Some contents to upload"
 
-    res = tmp_path / "data.nc"
+    res = Path("data.nc")
     res.write_bytes(contents)
 
     return res, hashlib.md5(contents).hexdigest()  # noqa: S324 # Zenodo uses md5
@@ -116,7 +124,7 @@ def test_upload_file_strips_the_local_path(
     no_token_in_env, make_recording_session, make_response, tmp_path
 ):
     """
-    Zenodo has no directories, so the file lands under its basename
+    Zenodo has no directories, so the file lands under its basename, and says so
     """
     path = tmp_path / "outputs" / "2024"
     path.mkdir(parents=True)
@@ -133,19 +141,21 @@ def test_upload_file_strips_the_local_path(
     )
     client = ZenodoClient(token="a-token", session=session)  # noqa: S106
 
-    client.upload_file(RECORD_ID, path)
+    with pytest.warns(OpenSCMZenodoWarning, match="will be uploaded as data.nc"):
+        client.upload_file(RECORD_ID, path)
 
     assert session.calls[0]["json"] == [{"key": "data.nc"}]
 
 
 def test_upload_file_quotes_the_filename(
-    no_token_in_env, make_recording_session, make_response, tmp_path
+    no_token_in_env, make_recording_session, make_response, tmp_path, monkeypatch
 ):
     """
     A name which is not URL safe still ends up hitting the right endpoint
     """
+    monkeypatch.chdir(tmp_path)
     filename = "a file & more.nc"
-    path = tmp_path / filename
+    path = Path(filename)
     path.write_bytes(b"x")
 
     md5 = hashlib.md5(b"x").hexdigest()  # noqa: S324 # Zenodo uses md5

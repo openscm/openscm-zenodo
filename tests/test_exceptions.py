@@ -11,9 +11,9 @@ import pytest
 
 from openscm_zenodo.exceptions import (
     MissingTokenError,
+    OpenSCMZenodoWarning,
     ZenodoError,
     ZenodoHTTPError,
-    ZenodoWarning,
     format_error_body,
     format_field_error,
 )
@@ -145,7 +145,7 @@ def test_warnings_point_at_the_caller(
     """
     A warning names the line which led to it, not a line of ours
 
-    The number of our own frames between a public method and `warn_zenodo` is
+    The number of our own frames between a public method and `warn_openscm_zenodo` is
     ours to change, so it cannot be something a caller has to count. This is the
     test that adding or removing a helper does not move the warning.
     """
@@ -164,6 +164,6 @@ def test_warnings_point_at_the_caller(
 
     # One warning is raised before the request and one after, through different
     # numbers of our frames, and both have to land in the same place: here.
-    ours = [w for w in recwarn if issubclass(w.category, ZenodoWarning)]
+    ours = [w for w in recwarn if issubclass(w.category, OpenSCMZenodoWarning)]
     assert len(ours) == 2
     assert [w.filename for w in ours] == [__file__, __file__]

@@ -8,6 +8,8 @@ because publishing cannot be undone.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from openscm_zenodo.checksums import get_file_md5
@@ -97,12 +99,12 @@ def test_import_files_skips_when_the_draft_has_files(sandbox_client, new_version
 
 
 def test_import_files_into_a_draft_with_files_would_fail(
-    sandbox_client, new_version_draft, tmp_path
+    sandbox_client, new_version_draft, in_a_working_directory
 ):
     """
     Pin the behaviour we are working around, so we notice if Zenodo changes it
     """
-    path = tmp_path / "in-the-way.txt"
+    path = Path("in-the-way.txt")
     path.write_text("in the way\n")
     sandbox_client.upload_file(new_version_draft, path, progress=False)
 
@@ -125,8 +127,8 @@ def test_update_metadata(sandbox_client, new_version_draft):
     assert draft["metadata"]["title"] == title
 
 
-def test_create_new_version_start_fresh(sandbox_client, tmp_path):
-    path = tmp_path / "fresh.txt"
+def test_create_new_version_start_fresh(sandbox_client, in_a_working_directory):
+    path = Path("fresh.txt")
     path.write_text("fresh contents\n")
 
     new_version_id = create_or_get_new_version(
@@ -148,8 +150,8 @@ def test_create_new_version_start_fresh(sandbox_client, tmp_path):
         )
 
 
-def test_create_new_version_inherit(sandbox_client, tmp_path):
-    path = tmp_path / "extra.txt"
+def test_create_new_version_inherit(sandbox_client, in_a_working_directory):
+    path = Path("extra.txt")
     path.write_text("an extra file\n")
 
     previous = sandbox_client.list_files(
@@ -177,11 +179,11 @@ def test_create_new_version_inherit(sandbox_client, tmp_path):
         )
 
 
-def test_create_new_version_mirror(sandbox_client, tmp_path):
+def test_create_new_version_mirror(sandbox_client, in_a_working_directory):
     """
     Inherited files which are not in the local set are deleted
     """
-    path = tmp_path / "only-this.txt"
+    path = Path("only-this.txt")
     path.write_text("only this one\n")
 
     new_version_id = create_or_get_new_version(
@@ -203,11 +205,11 @@ def test_create_new_version_mirror(sandbox_client, tmp_path):
         )
 
 
-def test_create_new_version_is_re_runnable(sandbox_client, tmp_path):
+def test_create_new_version_is_re_runnable(sandbox_client, in_a_working_directory):
     """
     Running the whole thing twice resumes the same draft rather than making two
     """
-    path = tmp_path / "resumed.txt"
+    path = Path("resumed.txt")
     path.write_text("resumed\n")
 
     first = create_or_get_new_version(

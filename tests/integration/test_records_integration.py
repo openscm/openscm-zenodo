@@ -12,9 +12,9 @@ import requests
 
 from openscm_zenodo.exceptions import (
     AccessNotPermittedError,
+    OpenSCMZenodoWarning,
     RecordNotFoundError,
     ZenodoHTTPError,
-    ZenodoWarning,
 )
 from openscm_zenodo.metadata import Metadata
 from openscm_zenodo.zenodo import (
@@ -272,7 +272,7 @@ def test_update_metadata_warns_about_unknown_vocabulary_before_zenodo_refuses_it
     metadata = Metadata(title="Vocabulary test", resource_type="not-a-resource-type")
 
     with (
-        pytest.warns(ZenodoWarning, match="vocabulary"),
+        pytest.warns(OpenSCMZenodoWarning, match="vocabulary"),
         pytest.raises(ZenodoHTTPError, match="Invalid value not-a-resource-type"),
     ):
         sandbox_client.update_metadata(draft_record_id, metadata)

@@ -148,7 +148,7 @@ So:
   this is a warning; `warn_unknown_vocabulary=False` turns it off.
 
 Both of these go through `warnings.warn`, with a
-[`ZenodoWarning`][openscm_zenodo.exceptions.ZenodoWarning] category, rather than
+[`OpenSCMZenodoWarning`][openscm_zenodo.exceptions.OpenSCMZenodoWarning] category, rather than
 through the logger — the logger is off until you turn it on, and these are
 things you need to hear either way.
 

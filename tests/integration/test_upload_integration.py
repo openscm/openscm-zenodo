@@ -8,10 +8,12 @@ that has hit the real thing.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from openscm_zenodo.checksums import get_file_md5
-from openscm_zenodo.exceptions import ZenodoHTTPError
+from openscm_zenodo.exceptions import OpenSCMZenodoWarning, ZenodoHTTPError
 
 pytestmark = pytest.mark.zenodo_token
 
@@ -23,11 +25,11 @@ def get_remote_files(client, record_id):
     }
 
 
-def test_upload_file(sandbox_client, draft_record_id, tmp_path):
+def test_upload_file(sandbox_client, draft_record_id, in_a_working_directory):
     """
     The init -> content -> commit flow works against the real API
     """
-    path = tmp_path / "data.txt"
+    path = Path("data.txt")
     path.write_text("Some contents for the integration test\n")
 
     entry = sandbox_client.upload_file(draft_record_id, path, progress=False)
@@ -41,28 +43,35 @@ def test_upload_file(sandbox_client, draft_record_id, tmp_path):
     }
 
 
-def test_upload_file_strips_the_local_path(sandbox_client, draft_record_id, tmp_path):
+def test_upload_file_strips_the_local_path(
+    sandbox_client, draft_record_id, in_a_working_directory
+):
     """
     Zenodo has no directories, so a nested file lands under its basename
+
+    Zenodo really does do this, which is what the warning is for.
     """
-    path = tmp_path / "outputs" / "2024"
+    path = Path("outputs") / "2024"
     path.mkdir(parents=True)
     path = path / "nested.txt"
     path.write_text("Nested\n")
 
-    sandbox_client.upload_file(draft_record_id, path, progress=False)
+    with pytest.warns(OpenSCMZenodoWarning, match=r"will be uploaded as nested\.txt"):
+        sandbox_client.upload_file(draft_record_id, path, progress=False)
 
     assert list(get_remote_files(sandbox_client, draft_record_id)) == ["nested.txt"]
 
 
-def test_upload_file_twice_replaces_it(sandbox_client, draft_record_id, tmp_path):
+def test_upload_file_twice_replaces_it(
+    sandbox_client, draft_record_id, in_a_working_directory
+):
     """
     Uploading the same name again replaces what is there
 
     A committed file's content cannot be overwritten,
     so this only works because we delete and initialise again.
     """
-    path = tmp_path / "data.txt"
+    path = Path("data.txt")
 
     path.write_text("First\n")
     sandbox_client.upload_file(draft_record_id, path, progress=False)
@@ -76,8 +85,8 @@ def test_upload_file_twice_replaces_it(sandbox_client, draft_record_id, tmp_path
     }
 
 
-def test_delete_file(sandbox_client, draft_record_id, tmp_path):
-    path = tmp_path / "data.txt"
+def test_delete_file(sandbox_client, draft_record_id, in_a_working_directory):
+    path = Path("data.txt")
     path.write_text("To be deleted\n")
 
     sandbox_client.upload_file(draft_record_id, path, progress=False)

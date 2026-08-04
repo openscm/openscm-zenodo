@@ -8,9 +8,9 @@ import pytest
 
 from openscm_zenodo.exceptions import (
     MetadataValidationError,
+    OpenSCMZenodoWarning,
     RecordNotFoundError,
     RecordNotWritableError,
-    ZenodoWarning,
 )
 from openscm_zenodo.metadata import Metadata
 from openscm_zenodo.zenodo import (
@@ -456,7 +456,7 @@ def test_update_metadata_warns_about_what_zenodo_discarded(
     # Zenodo answers without the `version` we sent
     client, _ = client_and_session([make_response(json_body=draft_body())])
 
-    with pytest.warns(ZenodoWarning, match="Zenodo discarded 'version'"):
+    with pytest.warns(OpenSCMZenodoWarning, match="Zenodo discarded 'version'"):
         client.update_metadata(
             RECORD_ID, Metadata.from_json({**COMPLETE_METADATA, "version": "v1"})
         )
@@ -473,7 +473,7 @@ def test_update_metadata_discarded_warning_can_be_silenced(
         warn_discarded=False,
     )
 
-    assert [w for w in recwarn if issubclass(w.category, ZenodoWarning)] == []
+    assert [w for w in recwarn if issubclass(w.category, OpenSCMZenodoWarning)] == []
 
 
 def test_update_metadata_warns_about_unknown_vocabulary(
@@ -481,7 +481,7 @@ def test_update_metadata_warns_about_unknown_vocabulary(
 ):
     client, _ = client_and_session([make_response(json_body=draft_body())])
 
-    with pytest.warns(ZenodoWarning, match="`resource_type` is 'pottery'"):
+    with pytest.warns(OpenSCMZenodoWarning, match="`resource_type` is 'pottery'"):
         client.update_metadata(
             RECORD_ID,
             Metadata.from_json(

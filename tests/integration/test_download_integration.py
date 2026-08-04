@@ -4,6 +4,8 @@ Integration tests of downloading, against Zenodo
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from openscm_zenodo.checksums import get_file_md5
@@ -95,20 +97,28 @@ def test_download_files_helper_from_a_published_record(tmp_path):
 
 
 @pytest.mark.zenodo_token
-def test_download_files_from_a_draft(sandbox_client, draft_record_id, tmp_path):
+def test_download_files_from_a_draft(
+    sandbox_client, draft_record_id, tmp_path, in_a_working_directory
+):
     """
     A draft's files download too, and the caller does not say it is a draft
 
     The record ID already decides that, so `list_files` works it out.
     """
-    source = tmp_path / "source"
+    source = Path("source")
     source.mkdir()
     contents = {"a.txt": "contents of a\n", "b.txt": "contents of b\n"}
     for name, text in contents.items():
         (source / name).write_text(text)
 
     sandbox_client.upload_files(
-        draft_record_id, list(source.iterdir()), n_threads=2, progress=False
+        draft_record_id,
+        list(source.iterdir()),
+        n_threads=2,
+        progress=False,
+        # These deliberately come from a directory, so that the download has
+        # somewhere else to write to
+        warn_path_stripped=False,
     )
 
     dest = tmp_path / "dest"
@@ -123,16 +133,22 @@ def test_download_files_from_a_draft(sandbox_client, draft_record_id, tmp_path):
 
 @pytest.mark.zenodo_token
 def test_download_files_round_trip_is_idempotent(
-    sandbox_client, draft_record_id, tmp_path
+    sandbox_client, draft_record_id, tmp_path, in_a_working_directory
 ):
     """
     Downloading twice into the same place fetches nothing the second time
     """
-    source = tmp_path / "source"
+    source = Path("source")
     source.mkdir()
     (source / "a.txt").write_text("contents of a\n")
     sandbox_client.upload_files(
-        draft_record_id, list(source.iterdir()), n_threads=1, progress=False
+        draft_record_id,
+        list(source.iterdir()),
+        n_threads=1,
+        progress=False,
+        # These deliberately come from a directory, so that the download has
+        # somewhere else to write to
+        warn_path_stripped=False,
     )
 
     dest = tmp_path / "dest"
@@ -146,14 +162,22 @@ def test_download_files_round_trip_is_idempotent(
 
 
 @pytest.mark.zenodo_token
-def test_download_files_subset_of_a_draft(sandbox_client, draft_record_id, tmp_path):
-    source = tmp_path / "source"
+def test_download_files_subset_of_a_draft(
+    sandbox_client, draft_record_id, tmp_path, in_a_working_directory
+):
+    source = Path("source")
     source.mkdir()
     for name in ("a.txt", "b.txt"):
         (source / name).write_text(f"contents of {name}\n")
 
     sandbox_client.upload_files(
-        draft_record_id, list(source.iterdir()), n_threads=1, progress=False
+        draft_record_id,
+        list(source.iterdir()),
+        n_threads=1,
+        progress=False,
+        # These deliberately come from a directory, so that the download has
+        # somewhere else to write to
+        warn_path_stripped=False,
     )
 
     dest = tmp_path / "dest"

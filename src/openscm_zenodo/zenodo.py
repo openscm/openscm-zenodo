@@ -5,11 +5,13 @@ Zenodo interactions handling
 from __future__ import annotations
 
 import concurrent.futures
+import contextlib
 import hashlib
 import json
 import logging
 import os
 import os.path
+import tempfile
 import urllib.parse
 from collections.abc import Callable, Collection, Iterable, Mapping
 from enum import Enum, auto
@@ -50,6 +52,7 @@ from openscm_zenodo.exceptions import (
     ChecksumMismatchError,
     DraftMetadataEditsNotFoundError,
     DraftRecordDraftMetadataEditsError,
+    DuplicateFileKeyError,
     FileNotOnRecordError,
     FileTransferFailedError,
     MissingTokenError,
@@ -59,7 +62,7 @@ from openscm_zenodo.exceptions import (
     UnknownCitationStyleError,
     ZenodoError,
     ZenodoHTTPError,
-    warn_zenodo,
+    warn_openscm_zenodo,
 )
 from openscm_zenodo.logging import mask_token
 from openscm_zenodo.metadata import Metadata, find_discarded_metadata
@@ -69,6 +72,7 @@ from openscm_zenodo.progress import (
     get_files_progress_bar,
     get_progress_reading_wrapper,
 )
+from openscm_zenodo.zipping import zip_files
 
 _T = TypeVar("_T")
 _R = TypeVar("_R")
@@ -1399,6 +1403,68 @@ def _log_transfer_retry(retry_state: RetryCallState) -> None:
     )
 
 
+def get_upload_filenames(paths: Collection[Path]) -> dict[str, Path]:
+    """
+    Map each path to the name it will have on Zenodo
+
+    Parameters
+    ----------
+    paths
+        Files which are going to be uploaded
+
+    Returns
+    -------
+    :
+        The name each path will land under, which is its basename
+
+    Raises
+    ------
+    DuplicateFileKeyError
+        Several *different* files would land under one name.
+
+        There is no right answer to pick, so this is an error rather than a
+        warning: uploading them all would leave whichever finished last.
+        The same file named twice is not a collision, it is one upload.
+
+    Examples
+    --------
+    >>> sorted(get_upload_filenames([Path("out/a.nc"), Path("b.nc")]))
+    ['a.nc', 'b.nc']
+    """
+    by_filename: dict[str, list[Path]] = {}
+    for path in paths:
+        by_filename.setdefault(path.name, []).append(path)
+
+    for filename, sharing in by_filename.items():
+        if len({path.resolve() for path in sharing}) > 1:
+            raise DuplicateFileKeyError(filename, paths=sharing)
+
+    return {filename: sharing[0] for filename, sharing in by_filename.items()}
+
+
+def warn_about_stripped_paths(paths: Collection[Path]) -> None:
+    """
+    Warn about paths whose directories Zenodo will discard
+
+    Parameters
+    ----------
+    paths
+        Files which are going to be uploaded
+    """
+    # A bare `a.nc` has a parent of `.`, and nothing is lost
+    stripped = [path for path in paths if path.parent not in (Path(), Path("."))]
+    if not stripped:
+        return
+
+    warn_openscm_zenodo(
+        "Zenodo has no directories, so these files will lose the path they are "
+        "under:\n"
+        + "\n".join(f"- {path} will be uploaded as {path.name}" for path in stripped)
+        + "\nPass `warn_path_stripped=False` to silence this, or use "
+        "`upload_files_as_zip` to keep the structure."
+    )
+
+
 def was_field_sent(sent: Mapping[str, Any], field: str) -> bool:
     """
     Did a request body contain the field Zenodo is complaining about?
@@ -2030,6 +2096,7 @@ class ZenodoClient:
         progress: bool = True,
         position: int | None = None,
         max_attempts: int = 5,
+        warn_path_stripped: bool = True,
     ) -> FileEntry:
         """
         Upload a file to a record's draft
@@ -2087,6 +2154,9 @@ class ZenodoClient:
             So the whole upload is retried instead,
             re-reading the file and resetting the progress bar each time.
 
+        warn_path_stripped
+            Should we warn if the file's local directories are about to be lost?
+
         Returns
         -------
         :
@@ -2104,6 +2174,9 @@ class ZenodoClient:
         record_id = get_record_id(record_id)
         filename = path.name
         logger.info(f"Uploading {path} as {filename!r} to record {record_id!r}")
+
+        if warn_path_stripped:
+            warn_about_stripped_paths([path])
 
         local_md5_to_check = None
         if verify_checksum:
@@ -2279,9 +2352,9 @@ class ZenodoClient:
         record_id = get_record_id(record_id)
         return self._list_files_at(record_id, draft=self.is_draft(record_id))
 
-    def _diff_files(self, record_id: RecordIDLike, paths: Collection[Path]) -> FileDiff:
+    def _diff_files(self, record_id: RecordIDLike, want: dict[str, Path]) -> FileDiff:
         """
-        Work out what has to change for a record's files to match `paths`
+        Work out what has to change for a record's files to match `want`
 
         Zenodo reports each file's checksum in the listing,
         so we can do this without downloading anything.
@@ -2291,18 +2364,17 @@ class ZenodoClient:
         record_id
             ID of the record whose files to compare against
 
-        paths
-            Local files to compare
+        want
+            Local files to compare, keyed by the name they will have on Zenodo,
+            from [`get_upload_filenames`][openscm_zenodo.zenodo.get_upload_filenames]
 
         Returns
         -------
         :
-            The difference between `paths` and the record's files
+            The difference between `want` and the record's files
         """
         record_id = get_record_id(record_id)
         remote = self._list_files_at(record_id, draft=True)
-        # Zenodo has no directories, so a local file's name is its name on Zenodo
-        want = {path.name: path for path in paths}
 
         to_upload = {}
         unchanged = []
@@ -2372,6 +2444,9 @@ class ZenodoClient:
                     progress=progress,
                     position=position,
                     max_attempts=max_attempts,
+                    # Warned about once for the whole batch by our caller,
+                    # rather than once per file from inside a thread
+                    warn_path_stripped=False,
                 )
 
         entries = _run_in_parallel(
@@ -2384,7 +2459,7 @@ class ZenodoClient:
 
         return {entry.filename: entry for entry in entries}
 
-    def upload_files(
+    def upload_files(  # noqa: PLR0913
         self,
         record_id: RecordIDLike,
         paths: Collection[Path],
@@ -2392,6 +2467,7 @@ class ZenodoClient:
         n_threads: int = 4,
         progress: bool = True,
         max_attempts: int = 5,
+        warn_path_stripped: bool = True,
     ) -> dict[str, FileEntry]:
         """
         Add files to a record
@@ -2424,10 +2500,18 @@ class ZenodoClient:
         max_attempts
             Maximum number of times to try each upload before giving up
 
+        warn_path_stripped
+            Should we warn if any file's local directories are about to be lost?
+
         Returns
         -------
         :
             The draft's files once we are done, keyed by their name on Zenodo
+
+        Raises
+        ------
+        DuplicateFileKeyError
+            Several paths would land under one name, raised before any request
 
         Notes
         -----
@@ -2438,7 +2522,14 @@ class ZenodoClient:
         Turning that off would remove a safety net and save nothing.
         """
         record_id = get_record_id(record_id)
-        diff = self._diff_files(record_id, paths)
+        # Zenodo has no directories, so a local file's name is its name on
+        # Zenodo. Worked out before anything is sent, so a collision raises
+        # rather than leaving a half-done state behind.
+        want = get_upload_filenames(paths)
+        if warn_path_stripped:
+            warn_about_stripped_paths(paths)
+
+        diff = self._diff_files(record_id, want)
 
         logger.info(
             f"Uploading {len(diff.to_upload)} file(s) to record {record_id!r}, "
@@ -2455,7 +2546,7 @@ class ZenodoClient:
 
         return {**diff.remote, **uploaded}
 
-    def mirror_files(
+    def mirror_files(  # noqa: PLR0913
         self,
         record_id: RecordIDLike,
         paths: Collection[Path],
@@ -2463,6 +2554,7 @@ class ZenodoClient:
         n_threads: int = 4,
         progress: bool = True,
         max_attempts: int = 5,
+        warn_path_stripped: bool = True,
     ) -> dict[str, FileEntry]:
         """
         Make a record contain exactly `paths`
@@ -2494,13 +2586,30 @@ class ZenodoClient:
         max_attempts
             Maximum number of times to try each upload before giving up
 
+        warn_path_stripped
+            Should we warn if any file's local directories are about to be lost?
+
         Returns
         -------
         :
             The draft's files once we are done, keyed by their name on Zenodo
+
+        Raises
+        ------
+        DuplicateFileKeyError
+            Several paths would land under one name, raised before any request.
+
+            This matters more here than in
+            [`upload_files`][openscm_zenodo.zenodo.ZenodoClient.upload_files]:
+            a collision would make the draft's file list disagree with `paths`,
+            and this method deletes whatever is not in that list.
         """
         record_id = get_record_id(record_id)
-        diff = self._diff_files(record_id, paths)
+        want = get_upload_filenames(paths)
+        if warn_path_stripped:
+            warn_about_stripped_paths(paths)
+
+        diff = self._diff_files(record_id, want)
 
         logger.info(
             f"Mirroring {len(paths)} file(s) onto record {record_id!r}: "
@@ -2529,6 +2638,100 @@ class ZenodoClient:
         }
 
         return {**kept, **uploaded}
+
+    def upload_files_as_zip(  # noqa: PLR0913
+        self,
+        record_id: RecordIDLike,
+        paths: Collection[Path],
+        *,
+        zip_name: str = "archive.zip",
+        base_dir: Path | None = None,
+        keep_zip_dir: Path | None = None,
+        progress: bool = True,
+        max_attempts: int = 5,
+    ) -> FileEntry:
+        """
+        Upload files as a single archive, so their structure survives
+
+        Zenodo has no directories, so
+        [`upload_files`][openscm_zenodo.zenodo.ZenodoClient.upload_files]
+        uploads each file under its own name and anything above that is lost.
+        This is the way to keep it. Zenodo's web interface shows what is inside
+        an archive, so the contents stay browsable.
+
+        The archive is deterministic, so re-running this with unchanged files
+        uploads nothing.
+
+        Parameters
+        ----------
+        record_id
+            ID of the record whose draft to upload to
+
+        paths
+            Files to archive and upload
+
+        zip_name
+            Name the archive lands under on Zenodo
+
+        base_dir
+            Directory the paths inside the archive are relative to, see
+            [`zip_files`][openscm_zenodo.zipping.zip_files]
+
+        keep_zip_dir
+            Directory to write the archive into, under `zip_name`.
+
+            If not supplied, it is built in a temporary directory and deleted
+            once it has been uploaded.
+
+        progress
+            Should progress bars be shown?
+
+        max_attempts
+            Maximum number of times to try the upload before giving up
+
+        Returns
+        -------
+        :
+            The archive's entry on the draft
+
+        Raises
+        ------
+        DuplicateFileKeyError
+            Several paths would land in the same place inside the archive
+
+        Notes
+        -----
+        To upload several archives, build them with
+        [`zip_files`][openscm_zenodo.zipping.zip_files] and pass them to
+        `upload_files`, which is two lines and keeps this method single-purpose.
+        """
+        record_id = get_record_id(record_id)
+
+        if not zip_name.endswith(".zip"):
+            warn_openscm_zenodo(
+                f"The archive will be uploaded as {zip_name!r}, "
+                "which does not end in '.zip'."
+            )
+
+        with contextlib.ExitStack() as stack:
+            if keep_zip_dir is None:
+                into = Path(stack.enter_context(tempfile.TemporaryDirectory()))
+
+            else:
+                into = keep_zip_dir
+
+            dest = into / zip_name
+            zip_files(paths, dest, base_dir=base_dir, progress=progress)
+
+            return self.upload_file(
+                record_id,
+                dest,
+                progress=progress,
+                max_attempts=max_attempts,
+                # The archive's directory is ours, not the caller's,
+                # and keeping the structure is the whole point of being here
+                warn_path_stripped=False,
+            )
 
     def delete_files(
         self,
@@ -3461,7 +3664,7 @@ class ZenodoClient:
                 name for name, (given, default) in asked_for.items() if given != default
             ]
             if supplied:
-                warn_zenodo(
+                warn_openscm_zenodo(
                     f"Ignoring {' and '.join(supplied)}: "
                     f"they only apply to {CitationFormat.citation.value!r}, "
                     f"not {fmt.value!r}",
@@ -3477,7 +3680,7 @@ class ZenodoClient:
             )
 
         if warn_unknown_style and style not in KNOWN_CITATION_STYLES:
-            warn_zenodo(
+            warn_openscm_zenodo(
                 f"We have not checked the citation style {style!r}. "
                 "Zenodo accepts more CSL styles than we know about, "
                 "so we are sending it anyway. "
@@ -3741,7 +3944,7 @@ class ZenodoClient:
         if warn_unknown_vocabulary:
             unknown = metadata.find_unknown_vocabulary_values()
             if unknown:
-                warn_zenodo(
+                warn_openscm_zenodo(
                     # The prose goes first and the reports last: each one ends
                     # with a vocabulary in full, so anything after them is a
                     # long way down the message.
@@ -3780,7 +3983,7 @@ class ZenodoClient:
         if not discarded:
             return
 
-        warn_zenodo(
+        warn_openscm_zenodo(
             f"Zenodo discarded "
             f"{', '.join(repr(key) for key in discarded)} "
             f"from the metadata of record {record_id!r}. "
@@ -3840,7 +4043,7 @@ class ZenodoClient:
         if not reports:
             return
 
-        warn_zenodo(
+        warn_openscm_zenodo(
             f"Zenodo did not refuse our request to {description}, "
             "but it declined to apply some of what we asked for, "
             "so the settings named below are not what you asked them to be. "

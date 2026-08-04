@@ -45,6 +45,9 @@ UPDATE_METADATA_PATH = f"{_CLIENT_PATH}.update_metadata"
 ACCESS_PATH = "openscm_zenodo.zenodo.Access"
 """Full path to the class which describes who may see a record"""
 
+ZIP_UPLOAD_PATH = f"{_CLIENT_PATH}.upload_files_as_zip"
+"""Full path to the method which uploads files as one archive"""
+
 
 class ZenodoError(Exception):
     """
@@ -52,7 +55,7 @@ class ZenodoError(Exception):
     """
 
 
-class ZenodoWarning(UserWarning):
+class OpenSCMZenodoWarning(UserWarning):
     """
     Base class for all warnings raised by `openscm_zenodo`
 
@@ -69,9 +72,9 @@ class ZenodoWarning(UserWarning):
     ```python
     import warnings
 
-    from openscm_zenodo.exceptions import ZenodoWarning
+    from openscm_zenodo.exceptions import OpenSCMZenodoWarning
 
-    warnings.simplefilter("error", ZenodoWarning)
+    warnings.simplefilter("error", OpenSCMZenodoWarning)
     ```
     """
 
@@ -82,11 +85,11 @@ def _stacklevel_outside_this_package() -> int:
 
     Counting frames by hand does not work: the number depends on how many of our
     own functions happen to sit between the public method and
-    [`warn_zenodo`][openscm_zenodo.exceptions.warn_zenodo], so it is wrong again
-    the moment a helper is added or removed, and it would have to be a parameter
-    on every public method to let a caller correct it. The question we actually
-    want answered is "which line of *theirs* led to this?", and that is one the
-    stack can answer for itself.
+    [`warn_openscm_zenodo`][openscm_zenodo.exceptions.warn_openscm_zenodo],
+    so it is wrong again the moment a helper is added or removed, and it would
+    have to be a parameter on every public method to let a caller correct it.
+    The question we actually want answered is "which line of *theirs* led to
+    this?", and that is one the stack can answer for itself.
 
     This is a well-trodden path rather than a clever idea: pandas keeps a
     `find_stack_level` of its own for exactly this, and Python 3.12 added
@@ -101,12 +104,12 @@ def _stacklevel_outside_this_package() -> int:
         [`warnings.warn`](https://docs.python.org/3/library/warnings.html),
         pointing at the nearest frame which is not one of ours
     """
-    # `warnings.warn(stacklevel=1)` is `warn_zenodo` itself, `2` is its caller,
+    # `warnings.warn(stacklevel=1)` is `warn_openscm_zenodo` itself, `2` is its caller,
     # which is where we start looking.
     level = 2
 
     frame = inspect.currentframe()
-    for _ in range(2):  # this function, then `warn_zenodo`
+    for _ in range(2):  # this function, then `warn_openscm_zenodo`
         if frame is None:  # pragma: no cover - only without frame support
             return level
 
@@ -120,7 +123,7 @@ def _stacklevel_outside_this_package() -> int:
     return level
 
 
-def warn_zenodo(message: str) -> None:
+def warn_openscm_zenodo(message: str) -> None:
     """
     Warn about something a caller needs to hear, whatever their logging setup
 
@@ -133,7 +136,9 @@ def warn_zenodo(message: str) -> None:
     message
         What to say
     """
-    warnings.warn(message, ZenodoWarning, stacklevel=_stacklevel_outside_this_package())
+    warnings.warn(
+        message, OpenSCMZenodoWarning, stacklevel=_stacklevel_outside_this_package()
+    )
 
 
 class MissingTokenError(ZenodoError):
@@ -422,6 +427,39 @@ class RecordNotWritableError(ZenodoError):
             )
 
         super().__init__(msg)
+
+
+class DuplicateFileKeyError(ZenodoError):
+    """
+    Raised when several local paths would land under one name
+
+    Zenodo has no directories, so a file is identified by its name alone.
+    """
+
+    def __init__(self, filename: str, *, paths: Collection[Path]) -> None:
+        """
+        Initialise
+
+        Parameters
+        ----------
+        filename
+            Name the paths collide under
+
+        paths
+            The colliding paths
+        """
+        self.filename = filename
+        self.paths = tuple(paths)
+
+        listed = ", ".join(repr(str(path)) for path in self.paths)
+
+        super().__init__(
+            f"{listed} would all be uploaded as {filename!r}, "
+            "because Zenodo has no directories and identifies a file by its "
+            "name alone, so only one of them would survive. "
+            "Rename them, upload them to different records, or use "
+            f"`{ZIP_UPLOAD_PATH}` to keep them apart in one archive."
+        )
 
 
 class AccessNotPermittedError(ZenodoError):

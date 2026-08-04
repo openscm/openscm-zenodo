@@ -8,6 +8,8 @@ That is fine on the sandbox, but it is why they are kept few.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from openscm_zenodo.exceptions import (
@@ -19,11 +21,11 @@ from openscm_zenodo.zenodo import FilesMode, create_or_get_new_version
 pytestmark = pytest.mark.zenodo_token
 
 
-def test_publish(sandbox_client, draft_record_id, tmp_path):
+def test_publish(sandbox_client, draft_record_id, in_a_working_directory):
     """
     A draft with files and metadata can be published
     """
-    path = tmp_path / "published.txt"
+    path = Path("published.txt")
     path.write_text("published contents\n")
     sandbox_client.upload_file(draft_record_id, path, progress=False)
 
@@ -37,7 +39,9 @@ def test_publish(sandbox_client, draft_record_id, tmp_path):
     assert list(sandbox_client.list_files(published_id)) == ["published.txt"]
 
 
-def test_create_new_version_publish(sandbox_client, draft_record_id, tmp_path):
+def test_create_new_version_publish(
+    sandbox_client, draft_record_id, in_a_working_directory
+):
     """
     The whole path, end to end: publish, new version, files, publish
 
@@ -45,12 +49,12 @@ def test_create_new_version_publish(sandbox_client, draft_record_id, tmp_path):
     record. Versioning a shared one leaves a file behind on every run, and the
     legacy end-to-end test versions the same chain and counts the files on it.
     """
-    first = tmp_path / "first.txt"
+    first = Path("first.txt")
     first.write_text("the first version\n")
     sandbox_client.upload_file(draft_record_id, first, progress=False)
     first_id = sandbox_client.publish(draft_record_id)
 
-    path = tmp_path / "release.txt"
+    path = Path("release.txt")
     path.write_text("a released file\n")
 
     new_version_id = create_or_get_new_version(
@@ -69,7 +73,7 @@ def test_create_new_version_publish(sandbox_client, draft_record_id, tmp_path):
 
 
 def test_editing_a_published_record_in_place(
-    sandbox_client, draft_record_id, build_metadata, tmp_path
+    sandbox_client, draft_record_id, build_metadata, in_a_working_directory
 ):
     """
     A published record's metadata can be corrected, but only deliberately
@@ -79,7 +83,7 @@ def test_editing_a_published_record_in_place(
     and DOI. Taking the draft is how you say that is what you meant.
     This is the live version of the decision made in Part 13.3.
     """
-    path = tmp_path / "corrected.txt"
+    path = Path("corrected.txt")
     path.write_text("a record needs a file to be publishable\n")
     sandbox_client.upload_file(draft_record_id, path, progress=False)
 
