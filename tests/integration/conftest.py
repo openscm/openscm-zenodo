@@ -8,7 +8,7 @@ import pytest
 
 from openscm_zenodo.exceptions import ZenodoHTTPError
 from openscm_zenodo.metadata import Creator, Metadata, Subject
-from openscm_zenodo.zenodo import ZenodoClient, ZenodoDomain, resolve_token
+from openscm_zenodo.zenodo import ZenodoClient, ZenodoDomain
 
 HTTP_NOT_FOUND = 404
 
@@ -85,31 +85,6 @@ def sandbox_client():
     """A client pointed at the Zenodo sandbox"""
     with ZenodoClient(zenodo_domain=ZenodoDomain.sandbox) as client:
         yield client
-
-
-@pytest.fixture
-def legacy_zenodo_token(monkeypatch):
-    """
-    Put the sandbox token in `ZENODO_TOKEN`, where the legacy code looks for it
-
-    **TO BE DELETED** with the legacy tests it serves (plan Part 8):
-    `test_flow.py` and `test_cli.py`, and their `_token_where_the_legacy_code_looks`
-    fixtures.
-
-    `ZenodoInteractor` is handed `os.environ["ZENODO_TOKEN"]` directly, and the
-    legacy CLI declares `envvar="ZENODO_TOKEN"`, which typer resolves before any
-    of our code runs. Neither can see a token which lives only in
-    `ZENODO_SANDBOX_TOKEN`, which is where a sandbox token belongs. So the tests
-    which still exercise them map one onto the other, the same way CI does
-    today. This goes when the CLI is trimmed and the legacy paths go with it.
-    """
-    resolved = resolve_token(zenodo_domain=ZenodoDomain.sandbox)
-    if resolved.token is None:  # pragma: no cover - the marker skips first
-        pytest.skip("no Zenodo sandbox token")
-
-    monkeypatch.setenv("ZENODO_TOKEN", resolved.token)
-
-    return resolved.token
 
 
 @pytest.fixture

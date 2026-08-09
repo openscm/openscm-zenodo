@@ -1,5 +1,65 @@
 """
 Logging
+
+## What the levels are for
+
+`INFO` and `DEBUG` have different audiences, and that is the distinction which
+governs everything else here.
+
+- **`INFO` is user interface.** It is the narrative of what happened, for
+  somebody watching a command run. This is what `-v` / `-q` on the command line
+  adjust, see
+  [`get_level_from_verbosity`][openscm_zenodo.logging.get_level_from_verbosity].
+- **`DEBUG` is diagnostics.** Request URLs, the plan a mirror worked out, MD5
+  timings, expected misses — the things you want when working out why something
+  behaved the way it did.
+
+Messages follow one rule: **a function may only log what it knows.** It knows
+what it *did*; it does not know why it was called. So `INFO` states outcomes as
+facts ("Uploaded 2 file(s) to record '1234'"), and anything not yet true —
+intentions, "about to do X" — goes to `DEBUG`. This is not a style preference:
+a function cannot know how deeply it is nested, so a message which announces an
+intention is a claim that some *other* caller may immediately contradict. Facts
+compose safely at any depth; intentions do not.
+`tests/test_log_messages.py` enforces it.
+
+## Why the messages are free-form rather than structured
+
+Structured logging (fields a machine can query, rather than a sentence) is the
+better shape once something aggregates logs across many runs. We do not do it
+yet, deliberately:
+
+- **Field names are a public interface with no deprecation path.** The moment
+  somebody greps `record_id` in their pipeline, we own that name, and we cannot
+  know whether they want `record_id`, `recordId` or `zenodo.record.id` until such
+  a consumer exists. Today the only consumer we know of is our own command-line
+  interface, whose audience is a human.
+- **Waiting costs nothing, because loguru separates the record from its
+  rendering.** `logger.bind(record_id=...)` attaches fields to the same call that
+  produces the sentence; a `serialize=True` sink then emits JSON while a normal
+  sink keeps printing text. Adding structure later is additive — no caller
+  changes, no migration, and the "structured logs are hard to read" problem is
+  the sink's to solve, not ours. So there is no first-mover advantage to guessing
+  a schema now.
+- **The trigger to revisit is a real request**, i.e. somebody asking how to get
+  these into their log aggregator. That request also tells us the field names,
+  which is the piece we are missing.
+
+## Why the library logs at all
+
+The rule libraries follow is *do not configure logging, do emit it*: the
+application decides where records go. We comply — `openscm_zenodo` disables its
+own logger on import and
+[`setup_logging`][openscm_zenodo.logging.setup_logging] is opt-in, which the CLI
+calls and a library caller need not. That is what makes emitting these messages
+harmless, and it is why they are not simply removed.
+
+One consequence worth knowing: we log through **loguru**, which is a global
+singleton. An application built on the standard library's `logging` needs an
+interception handler to capture our records at all. If this package ends up
+embedded in applications with real log pipelines, that — not the free-form
+messages — is the thing to revisit, and it is a reason not to deepen the loguru
+investment with a bespoke structured-field layer in the meantime.
 """
 
 from __future__ import annotations
@@ -21,6 +81,69 @@ class ConfigLike(TypedDict):
     """
 
     handlers: list[HandlerConfig]
+
+
+VERBOSITY_LEVELS: tuple[str, ...] = (
+    "CRITICAL",
+    "ERROR",
+    "WARNING",
+    "INFO",
+    "DEBUG",
+    "TRACE",
+)
+"""
+Levels which verbosity steps through, quietest first
+
+`-q` steps towards the front, `-v` towards the back, from
+[`VERBOSITY_LEVEL_DEFAULT`][openscm_zenodo.logging.VERBOSITY_LEVEL_DEFAULT].
+"""
+
+VERBOSITY_LEVEL_DEFAULT = "INFO"
+"""
+Level used when neither `-v` nor `-q` is given
+
+`INFO` is the narrative of what happened, which is what somebody running a
+command wants to see, see this module's docstring.
+"""
+
+
+def get_level_from_verbosity(verbose: int = 0, quiet: int = 0) -> str:
+    """
+    Work out a logging level from how many times `-v` and `-q` were given
+
+    Parameters
+    ----------
+    verbose
+        Number of times `-v` was given, each step showing more
+
+    quiet
+        Number of times `-q` was given, each step showing less
+
+    Returns
+    -------
+    :
+        Level to log at, one of
+        [`VERBOSITY_LEVELS`][openscm_zenodo.logging.VERBOSITY_LEVELS]
+
+    Examples
+    --------
+    >>> get_level_from_verbosity()
+    'INFO'
+    >>> get_level_from_verbosity(verbose=1)
+    'DEBUG'
+    >>> get_level_from_verbosity(quiet=1)
+    'WARNING'
+
+    Asking for more than there is gets you all there is,
+    rather than an error about a flag which can only have been meant kindly
+
+    >>> get_level_from_verbosity(verbose=10)
+    'TRACE'
+    """
+    default = VERBOSITY_LEVELS.index(VERBOSITY_LEVEL_DEFAULT)
+    step = default + verbose - quiet
+
+    return VERBOSITY_LEVELS[max(0, min(step, len(VERBOSITY_LEVELS) - 1))]
 
 
 def get_default_config(
@@ -126,7 +249,7 @@ def setup_logging(
             raise
 
         loguru_configurer = LoguruConfig.load(logging_config, configure=False)
-        loguru_configurer.load()
+        loguru_configurer.parse().configure()
 
     logger.enable("openscm_zenodo")
 

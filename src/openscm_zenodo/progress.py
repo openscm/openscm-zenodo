@@ -11,6 +11,7 @@ from contextlib import contextmanager
 from typing import Any
 
 import tqdm
+import tqdm.auto
 import tqdm.utils
 from attrs import define, field
 
@@ -39,7 +40,7 @@ def tqdm_write_sink(message: str) -> None:
     # so this is the stream whose bars need clearing.
     # end="" ensures that we don't have new lines appearing
     # where we don't want them.
-    tqdm.tqdm.write(message, end="", file=sys.stderr)
+    tqdm.auto.tqdm.write(message, end="", file=sys.stderr)
 
 
 def get_file_progress_bar(
@@ -73,10 +74,10 @@ def get_file_progress_bar(
     progress
         Should a progress bar be shown?
 
-        If `True` (the default), we let `tqdm` decide,
-        which means the bar silences itself
-        when `stderr` is not a terminal,
-        keeping continuous integration logs and piped output clean.
+        If `True` (the default), we let `tqdm` decide:
+        a bar in a terminal, a widget in a notebook,
+        and silence when `stderr` is neither,
+        which keeps continuous integration logs and piped output clean.
         Pass `False` to force the bar off.
 
     position
@@ -106,7 +107,7 @@ def get_file_progress_bar(
     """
     tqdm_kwargs: dict[str, Any] = {
         **TQDM_FILE_PROGRESS_KWARGS_DEFAULT,
-        # `disable=None` makes tqdm silence itself when stderr is not a terminal
+        # `disable=None` hands the decision to tqdm, see this module's docstring
         "disable": None if progress else True,
         "desc": desc[:desc_max_length],
         "total": total,
@@ -114,7 +115,7 @@ def get_file_progress_bar(
         **kwargs,
     }
 
-    return tqdm.tqdm(**tqdm_kwargs)
+    return tqdm.auto.tqdm(**tqdm_kwargs)
 
 
 def get_progress_reading_wrapper(file_handle: Any, progress_bar: tqdm.tqdm[Any]) -> Any:
@@ -167,8 +168,8 @@ def get_files_progress_bar(
     progress
         Should a progress bar be shown?
 
-        As with the per-file bars, `True` lets `tqdm` silence itself
-        when `stderr` is not a terminal.
+        As with the per-file bars, `True` lets `tqdm` decide,
+        so this is silent when `stderr` is neither a terminal nor a notebook.
 
     position
         Line to display the bar on.
@@ -195,7 +196,7 @@ def get_files_progress_bar(
         **kwargs,
     }
 
-    return tqdm.tqdm(**tqdm_kwargs)
+    return tqdm.auto.tqdm(**tqdm_kwargs)
 
 
 @define

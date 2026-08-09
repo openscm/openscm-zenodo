@@ -432,6 +432,83 @@ def test_get_record_error_which_is_not_about_finding_it(
         client.get_record(RECORD_ID)
 
 
+def test_get_record_draft_does_not_log_an_error(
+    make_recording_session, make_response, log_records
+):
+    """
+    Finding a draft is a success, so nothing is logged as an error
+
+    Getting there means asking for the published record and being told there is
+    none, which is the ordinary path for a draft rather than a problem. Logging
+    it as an `ERROR` made a working call look broken. The miss is still logged,
+    at `DEBUG`, because it is worth seeing when working out what happened.
+    """
+    session = make_recording_session(
+        [
+            make_response(status_code=404, url=RECORD_URL),
+            make_response(json_body=DRAFT_BODY),
+        ]
+    )
+    client = ZenodoClient(token="fake-token", session=session)  # noqa: S106
+
+    client.get_record(RECORD_ID)
+
+    assert not [record for record in log_records if record[0] == "ERROR"]
+    assert [
+        message
+        for level, message in log_records
+        if level == "DEBUG" and "404" in message
+    ]
+    # What a user watching this sees is one line, and it is true: the record was
+    # a draft, and nothing claims otherwise on the way there
+    assert [message for level, message in log_records if level == "INFO"] == [
+        f"Retrieved draft record {RECORD_ID!r}"
+    ]
+
+
+def test_is_draft_does_not_log_an_error(
+    make_recording_session, make_response, log_records
+):
+    """
+    Asking whether a record is a draft does not log an error to answer `True`
+
+    This is the path every download from a draft goes through, see
+    `test_get_record_draft_does_not_log_an_error`.
+    """
+    session = make_recording_session(
+        [
+            make_response(status_code=404, url=RECORD_URL),
+            make_response(json_body=DRAFT_BODY),
+        ]
+    )
+    client = ZenodoClient(token="fake-token", session=session)  # noqa: S106
+
+    assert client.is_draft(RECORD_ID)
+
+    assert not [record for record in log_records if record[0] == "ERROR"]
+
+
+def test_a_failure_nobody_expected_is_still_logged_as_an_error(
+    make_recording_session, make_response, log_records, no_token_in_env
+):
+    """
+    Keeping expected misses quiet does not quieten anything else
+    """
+    session = make_recording_session(
+        [make_response(status_code=500, url=RECORD_URL)],
+    )
+    client = ZenodoClient(session=session)
+
+    with pytest.raises(ZenodoHTTPError):
+        client.get_record(RECORD_ID)
+
+    assert [
+        message
+        for level, message in log_records
+        if level == "ERROR" and "500" in message
+    ]
+
+
 def test_get_parent_id(published, no_token_in_env):
     """
     The parent ID is read from the record's own document

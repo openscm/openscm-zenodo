@@ -5,6 +5,7 @@ See https://oprypin.github.io/mkdocs-literate-nav/
 -->
 - [Home](index.md)
 - [Installation](installation.md)
+- [Migrating from v0.x](migration.md)
 - [How-to guides](how-to-guides/index.md)
     - [How to upload to Zenodo](how-to-guides/how-to-upload-to-zenodo.py)
 - [Tutorials](tutorials/index.md)

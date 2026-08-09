@@ -10,7 +10,7 @@ import threading
 import time
 
 import pytest
-import tqdm as tqdm_module
+import tqdm.auto
 
 from openscm_zenodo.progress import (
     PositionAllocator,
@@ -22,13 +22,19 @@ from openscm_zenodo.progress import (
 
 @pytest.fixture
 def captured_kwargs(monkeypatch):
-    """Capture the arguments we hand to tqdm, without making a bar"""
+    """
+    Capture the arguments we hand to tqdm, without making a bar
+
+    We patch `tqdm.auto`, because that is what the bars are built from: it
+    resolves to the notebook implementation under IPython and the terminal one
+    everywhere else, which is what makes `disable=None` mean what we document.
+    """
     res = {}
 
     def fake_tqdm(**kwargs):
         res.update(kwargs)
 
-    monkeypatch.setattr(tqdm_module, "tqdm", fake_tqdm)
+    monkeypatch.setattr(tqdm.auto, "tqdm", fake_tqdm)
 
     return res
 

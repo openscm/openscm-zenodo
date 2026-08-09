@@ -151,6 +151,30 @@ def log_messages():
 
 
 @pytest.fixture
+def log_records():
+    """
+    Capture the messages logged by `openscm_zenodo`, with their levels
+
+    Use this instead of
+    [`log_messages`][tests.conftest.log_messages] when the level is the
+    point, e.g. "this is reported, but not as a failure". Records come back as
+    `(level, message)` pairs.
+    """
+    res = []
+
+    def sink(message):
+        res.append((message.record["level"].name, message.record["message"]))
+
+    handler_id = logger.add(sink, level="DEBUG")
+    logger.enable("openscm_zenodo")
+
+    yield res
+
+    logger.disable("openscm_zenodo")
+    logger.remove(handler_id)
+
+
+@pytest.fixture
 def no_token_in_env(monkeypatch):
     """
     Make sure no ambient token leaks into a test

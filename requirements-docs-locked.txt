@@ -60,7 +60,9 @@ colorama==0.4.6
     #   properdocs
     #   tqdm
 comm==0.2.3
-    # via ipykernel
+    # via
+    #   ipykernel
+    #   ipywidgets
 debugpy==1.8.16
     # via ipykernel
 decorator==5.2.1
@@ -102,11 +104,16 @@ ipykernel==6.30.1
     #   jupyterlab
     #   mkdocs-jupyter
 ipython==8.37.0 ; python_full_version < '3.11'
-    # via ipykernel
+    # via
+    #   ipykernel
+    #   ipywidgets
 ipython==9.4.0 ; python_full_version >= '3.11'
-    # via ipykernel
+    # via
+    #   ipykernel
+    #   ipywidgets
 ipython-pygments-lexers==1.1.1 ; python_full_version >= '3.11'
     # via ipython
+ipywidgets==8.1.8
 isoduration==20.11.0
     # via jsonschema
 jedi==0.19.2
@@ -163,6 +170,8 @@ jupyterlab-pygments==0.3.0
     # via nbconvert
 jupyterlab-server==2.27.3
     # via jupyterlab
+jupyterlab-widgets==3.0.16
+    # via ipywidgets
 jupytext==1.17.2
     # via mkdocs-jupyter
 lark==1.2.2
@@ -413,6 +422,7 @@ traitlets==5.14.3
     # via
     #   ipykernel
     #   ipython
+    #   ipywidgets
     #   jupyter-client
     #   jupyter-core
     #   jupyter-events
@@ -457,5 +467,7 @@ webencodings==0.5.1
     #   tinycss2
 websocket-client==1.8.0
     # via jupyter-server
+widgetsnbextension==4.0.15
+    # via ipywidgets
 win32-setctime==1.2.0 ; sys_platform == 'win32'
     # via loguru

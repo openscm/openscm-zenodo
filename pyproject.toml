@@ -37,7 +37,7 @@ classifiers = [
     "Programming Language :: Python :: 3.14",
     "Typing :: Typed",
 ]
-keywords = ["openscm", "zenodo", "command-line"]
+keywords = ["openscm", "zenodo", "command-line", "download"]
 
 [project.urls]
 Homepage = "https://openscm-zenodo.readthedocs.io"
@@ -83,6 +83,10 @@ docs = [
     "ruff==0.15.12",
     # Key dependencies for notebook_based_docs
     # ----------------------------------------
+    # Needed for progress bars to render in the executed notebooks:
+    # `tqdm.auto` falls back to its terminal implementation without it,
+    # and that one turns itself off because a kernel's stderr is not a terminal.
+    "ipywidgets==8.1.8",
     "jupyterlab==4.4.5",
     "jupytext==1.17.2",
     "mkdocs-jupyter==0.25.1",
@@ -98,6 +102,10 @@ tests-full = [
     # Key dependencies
     # ----------------
     "pytest-cov==6.0.0",
+    # So that `--logging-config` is covered.
+    # It is an optional runtime extra, and being in no test group
+    # is why it was able to break without anything noticing.
+    "loguru-config==0.1.0",
 ]
 # Test dependencies
 # (partly split because liccheck uses toml,

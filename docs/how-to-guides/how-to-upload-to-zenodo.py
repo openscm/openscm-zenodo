@@ -5,7 +5,7 @@
 #       extension: .py
 #       format_name: percent
 #       format_version: '1.3'
-#       jupytext_version: 1.16.6
+#       jupytext_version: 1.17.2
 #   kernelspec:
 #     display_name: Python 3 (ipykernel)
 #     language: python
@@ -15,28 +15,28 @@
 # %% [markdown]
 # # How to upload to Zenodo
 #
-# Here we describe how to upload files to Zenodo.
-#
-# **TO BE REWRITTEN** (plan Part 9). Everything below uses `ZenodoInteractor`
-# and the legacy deposit API, which is being replaced by `ZenodoClient`. It is
-# also the last thing outside the legacy tests which reads `ZENODO_TOKEN`
-# directly, so the docs build needs that variable set even though a sandbox
-# token belongs in `ZENODO_SANDBOX_TOKEN`.
+# Here we upload files to Zenodo, publish them, and download them again.
+# Everything runs against the [Zenodo sandbox](https://sandbox.zenodo.org),
+# so you can follow along without putting anything on the real Zenodo.
 
 # %% [markdown]
 # ## Imports
 
 # %%
-import copy
 import datetime as dt
-import os
 import sys
 import tempfile
 from pathlib import Path
 
 from loguru import logger
 
-from openscm_zenodo import ZenodoDomain, ZenodoInteractor
+from openscm_zenodo import (
+    CitationFormat,
+    Creator,
+    Metadata,
+    ZenodoClient,
+    ZenodoDomain,
+)
 
 # %% [markdown]
 # We enable logging in this notebook so you can see what is going on in more detail.
@@ -49,138 +49,238 @@ logger.enable("openscm_zenodo")
 # ## Files to upload
 #
 # Before you can get started,
-# you will need to have a file to upload.
+# you will need some files to upload.
 
 # %%
-to_upload = Path(tempfile.mkdtemp()) / "demo.txt"
-with open(to_upload, "w") as fh:
-    fh.write("Your content\n")
-    fh.write("will be better than this!")
+working_dir = Path(tempfile.mkdtemp())
 
-# %% [markdown] jp-MarkdownHeadingCollapsed=true
+to_upload = []
+for name in ("demo.txt", "demo-2.txt"):
+    path = working_dir / name
+    path.write_text(f"Your content will be better than this ({name})!\n")
+    to_upload.append(path)
+
+to_upload
+
+# %% [markdown] editable=true slideshow={"slide_type": ""}
 # ## Zenodo token
 #
 # In order to interact with the API,
 # you will need a token for Zenodo.
-# To create the token, go to https://zenodo.org/account/settings/applications/tokens/new/.
-# Make sure that the token has "deposit:actions" and "deposit:write" permissions,
-# otherwise you won't be able to do anything.
+# To create the token, go to https://zenodo.org/account/settings/applications/tokens/new/
+# (or https://sandbox.zenodo.org/account/settings/applications/tokens/new/
+# for the sandbox, which is a separate account with separate tokens).
 # Put your token somewhere safe,
 # if you leak it then others can do whatever they want with your Zenodo records!
 # (If you do leak your token, just revoke it, then no more damage can happen.)
+#
+# You do not have to pass the token to us.
+# If you do not, we look for it in, in order of preference:
+#
+# 1. `ZENODO_SANDBOX_TOKEN`, when you are using the sandbox domain
+# 1. `ZENODO_TOKEN`
+# 1. if using the command-line, you can also specify a `.env` file to use
+#
+# The sandbox variable comes first because sandbox and production tokens are not
+# interchangeable, and using a production token against the sandbox fails in a way
+# which looks like the record not existing.
+# Keeping them in separate variables means you can have both set at once.
+
+# %% editable=true slideshow={"slide_type": ""} tags=["remove_input"]
+import dotenv
+
+# This loads the `.env` file when running locally.
+# When building the docs on RtD, we pre-set the environment variable instead.
+#
+# The `remove_input` tag hides this cell
+# so it doesn't appear in the built docs.
+dotenv.load_dotenv()
+del dotenv
 
 # %% [markdown]
-# ## Zenodo interactor
+# ## Client
 #
-# The `ZenodoInteractor` class is our key class for interacting with Zenodo.
-# This class allows you to create new versions of deposits,
-# upload files and manipulate metadata.
+# [`ZenodoClient`][openscm_zenodo.zenodo.ZenodoClient] is the class for
+# interacting with Zenodo. It creates records, moves files in and out,
+# and edits metadata.
 
 # %%
-zi = ZenodoInteractor(
-    # When we run this example in our CI and the docs build,
-    # we set the environment variable before we run.
-    token=os.environ["ZENODO_TOKEN"],
-    # You will need a token in order to upload
+client = ZenodoClient(
     # In this example we use the sandbox domain.
     # You will want to use the production domain
     # once you're ready to actually post things.
     zenodo_domain=ZenodoDomain.sandbox,
 )
-zi
+client
 
 # %% [markdown]
-# ## Interact with zenodo
+# The token never appears in the representation above,
+# so a notebook like this one is safe to share.
+# What the client will tell you is *where* it found the token,
+# which is the thing you actually want to know when a record cannot be found.
+
+# %%
+client.token_source
 
 # %% [markdown]
-# ### Make new version
+# ## Create a record
 #
-# The first step is to make a new version
-# i.e. get a new draft deposition ID.
-# To do this, we start with any deposition ID.
+# A new record starts as a draft.
+# Nothing is public until you publish it,
+# and a draft can be deleted.
 
 # %%
-# This is the record we use for testing: https://sandbox.zenodo.org/records/166701
-any_deposition_id = "166701"
+record = client.create_record()
+record.record_id
 
 # %% [markdown]
-# From this we get the latest deposition ID.
-
-# %%
-latest_deposition_id = zi.get_latest_deposition_id(any_deposition_id)
-latest_deposition_id
-
-# %% [markdown]
-# Now we can get a draft deposition ID.
-# This will either use an existing draft,
-# or create a new draft if no existing draft exists.
-
-# %%
-draft_deposition_id = zi.get_draft_deposition_id(latest_deposition_id)
-draft_deposition_id
-
-# %% [markdown]
-# ## Upload metadata
+# ## Metadata
 #
-# The next thing to do is to upload/update any metadata we wish to.
-# Here we simply get the old metadata,
-# but you have full flexibility to start fresh if you wish.
-# The docs on what is allowed here are not great,
-# but [these docs](https://developers.zenodo.org/#representation)
-# are a better start than nothing.
-
-# %%
-metadata_current = zi.get_metadata(latest_deposition_id, user_controlled_only=True)
-
-metadata_current
-
-# %% [markdown]
-# Update the metadata.
+# Zenodo runs on [InvenioRDM](https://inveniordm.docs.cern.ch/),
+# and its metadata schema is
+# [documented here](../further-background/metadata-schema.md).
+# The parts you are most likely to need have their own arguments on
+# [`Metadata`][openscm_zenodo.metadata.Metadata];
+# anything else goes in `raw`.
 
 # %%
 timestamp = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-metadata_updated = copy.deepcopy(metadata_current)
-metadata_updated["metadata"]["description"] = (
-    "Test upload for OpenSCM-Zenodo, generated from the docs."
+
+metadata = Metadata(
+    title=f"OpenSCM-Zenodo docs run {timestamp}",
+    resource_type="dataset",
+    creators=(
+        Creator.person("Nicholls", "Zebedee", affiliations=["Climate Resource"]),
+        Creator.organisation("openscm-zenodo"),
+    ),
+    publication_date=dt.date.today().isoformat(),
+    publisher="Zenodo",
+    description="Test upload for OpenSCM-Zenodo, generated from the docs.",
+    version="v1.0.0",
 )
-metadata_updated["metadata"]["title"] = f"OpenSCM-Zenodo docs run {timestamp}"
-metadata_updated["metadata"]["creators"][0]["affiliation"] = (
-    "how-to-upload-to-zenodo.py"
-)
-metadata_updated
+metadata
 
 # %% [markdown]
-# Update the metadata on Zenodo.
+# Send it to the draft.
+# This replaces the draft's metadata rather than merging into it,
+# so what you pass here is what the record ends up with.
 
 # %%
-zi.update_metadata(
-    deposition_id=draft_deposition_id,
-    metadata=metadata_updated,
-).raise_for_status()
+client.update_metadata(record.record_id, metadata)
+
+# %% [markdown]
+# This method replaces rather than merges,
+# so **changing one field means sending all of them**.
+# However, you don't have to write the rest out again:
+# read what is on the record with
+# [`get_metadata`][openscm_zenodo.zenodo.ZenodoClient.get_metadata],
+# change the field you care about, and send it back to get a merge.
+
+# %%
+current = client.get_metadata(record.record_id)
+current.description = "A better description, without restating everything else."
+
+client.update_metadata(record.record_id, current)
+client.get_metadata(record.record_id).description
 
 # %% [markdown]
 # ## Upload the files
 #
-# Now we can also upload our files to the draft.
+# Now we can upload our files to the draft.
+#
+# Files which are already on the draft with the same contents are left alone,
+# so running this again after a failure part way through
+# only transfers what is still missing.
 
 # %%
-files_to_upload_l = [to_upload]
-zi.upload_files(
-    deposition_id=draft_deposition_id,
-    to_upload=files_to_upload_l,
-)
+client.upload_files(record.record_id, to_upload, progress=True)
+
+# %% [markdown]
+# Note that **Zenodo has no directories**.
+# Each file lands under its own name, whatever local directories it sat in, and
+# we warn you when that loses information.
+# If you need the structure kept, use
+# [`upload_files_as_zip`][openscm_zenodo.zenodo.ZenodoClient.upload_files_as_zip],
+# which bundles everything into one archive
+# (Zenodo's web interface shows what is inside an archive, so it stays browsable)
+# or create multiple archives using [`zip_files`][openscm_zenodo.zipping.zip_files]
+# and then upload them using
+# [`upload_files`][openscm_zenodo.zenodo.ZenodoClient.upload_files].
+
+# %% [markdown]
+# ## Download the files
+#
+# The files are on the draft now, so we can fetch them back.
+# There is nothing to say about the record being a draft:
+# the record ID already says which it is, and we work it out from there.
+
+# %%
+from_draft = working_dir / "from-draft"
+client.download_files(record.record_id, from_draft, progress=True)
+
+# %%
+sorted(path.name for path in from_draft.iterdir())
+
+# %% [markdown]
+# **Restricted and embargoed records need nothing special either.**
+# Access is just the token, so a record only you can see downloads exactly like
+# a public one, as long as the token belongs to somebody with access.
 
 # %% [markdown]
 # ## Publish the version
 #
-# If you want, you can even publish the version.
+# If you want, you can publish the version.
+#
+# **This cannot be undone.**
+# A published record cannot be deleted, and its files can no longer be changed —
+# changing files means making a new version, with
+# [`create_or_get_new_version`][openscm_zenodo.ZenodoClient.create_or_get_new_version].
 
 # %%
-zi.publish(draft_deposition_id).raise_for_status()
+published_id = client.publish(record.record_id)
+print(f"The published record is at: {client.zenodo_domain_url}/records/{published_id}")
+
+# %% [markdown]
+# Downloading from the published record is the same call as before.
+
+# %%
+from_published = working_dir / "from-published"
+client.download_files(published_id, from_published, progress=True)
+
+sorted(path.name for path in from_published.iterdir())
+
+# %% [markdown]
+# ## Cite the record
+#
+# Publishing mints a DOI, and Zenodo will render the citation for you.
+
+# %%
+client.get_record(published_id).doi
+
+# %%
+print(client.get_citation(published_id))
+
+# %% [markdown]
+# BibTeX is the default.
+# Ask for `CitationFormat.citation` to get a human-readable string instead,
+# in whichever [CSL](https://citationstyles.org/) style you want.
+
+# %%
 print(
-    "The published record is available at: "
-    f"{zi.zenodo_domain.value}/records/{draft_deposition_id}"
+    client.get_citation(
+        published_id, fmt=CitationFormat.citation, style="chicago-author-date"
+    )
 )
+
+# %% [markdown]
+# ## From the command line
+#
+# Moving bytes in and out, and getting a citation, are also available as
+# commands, which is usually what you want from a script or from CI:
+# see the [CLI documentation](../cli/index.md).
+#
+# Everything else — metadata, new versions, access — is Python only,
+# because it takes structured input which is better handled in Python.
 
 # %% [markdown]
 # ## Conclusion

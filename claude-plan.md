@@ -709,6 +709,121 @@ New `openscm_zenodo/exceptions.py`:
 `_request` logs the masked error body via `logger.error` and raises
 `ZenodoHTTPError`.
 
+### Logging — ✅ SETTLED (revised after Part 8)
+
+**The rule: a function may only log what it knows.** It knows what it *did*. It
+does not know *why* it was called. So:
+
+- **`INFO` is one past-tense outcome per method which does work.** "Retrieved
+  published record X", "Uploaded 2 file(s) to record X", "Published record X".
+- **`DEBUG` is mechanism and intention.** "About to do X", request URLs, the
+  upload/mirror plan, expected misses.
+- **Methods which only compose other methods log nothing at `INFO`.**
+  `get_record` and `get_metadata` are pass-throughs; whichever endpoint answers
+  states the fact.
+- **A method which is both an entry point and an internal step is told which**,
+  by a parameter — `get_published(expected_errors=...)`. That flag means "a miss
+  is one of the answers I am after", which is exactly the condition under which
+  the miss should be logged quietly.
+
+The original messages were present participles written at the layer which knows
+the mechanism: `get_published` logged `"Retrieving published record X"` before
+the request. Two things were wrong with that. It is a claim rather than a fact —
+untrue whenever the record turns out not to be published, which is *the normal
+path* when `get_record` is working out what it has. And it stacks: the same
+record produced `Retrieving record X` / `Retrieving published record X` /
+`Retrieving draft record X`, three lines announcing three intentions, one of
+which had already failed.
+
+Past-tense outcomes fix this at the root, because a fact is true no matter who
+called you, so no function needs to know its own depth. **Depth-based levels
+("low-level functions log `DEBUG`") cannot be applied**, because depth is not a
+property of a function: `get_published` is an entry point when a user calls it
+and a probe when `get_record` does.
+
+Two things were considered and rejected:
+
+- **Caller-injected log messages.** Every call site would have to invent wording,
+  so it drifts; messages could not be improved centrally; and it does not compose
+  through three layers. Note the *bounded* version of this is already in use and
+  is worth keeping: `_request(description="get published record X")` takes a noun
+  phrase which the callee splices into a sentence it composes, and it feeds
+  **errors**, not logs.
+- **`logger.contextualize()`**, binding the operation once at the entry point so
+  every nested line carries it. It does work, including into functions which know
+  nothing about the operation — but loguru implements it with `contextvars`, which
+  do **not** propagate into `ThreadPoolExecutor` workers. With `{extra[op]}` in
+  the format, every line logged from inside `_run_in_parallel` raises
+  `KeyError: 'op'` inside the handler, and `upload_files`/`download_files` are
+  threaded. Revisit only with a `copy_context()` per submit.
+
+The MD5 timing logs got there first, which is the best evidence the rule is not
+invented: `get_file_md5` logs `"Computing MD5 for {path}"` at `debug` and
+`"Computed MD5 for {path} in {elapsed}s"` at `info`, and only when it was slow
+enough to be worth saying. Intent down, outcome up, nothing claimed before it is
+true.
+
+One consequence worth stating: because `openscm_zenodo` disables its own logger
+at import and the CLI turns it on, `INFO` is in practice "what someone watching a
+command run sees". That is the audience the outcome lines are written for.
+
+`tests/test_log_messages.py` keeps this honest by walking the AST for
+`logger.info` calls and failing on any message which opens with a present
+participle. It found one on the first run (`zipping.py` logged `"Zipping N
+file(s)"`), which is the argument for having it: a convention with no check
+erodes one plausible message at a time.
+
+#### Free-form messages, not structured logging — and `-v`/`-q`
+
+The messages are prose, not fields a machine can query. Five options were on the
+table: leave it, switch to structured, do both, drop logging from the library
+entirely, or reframe it as verbosity. **We keep free-form and add `-v`/`-q`.**
+The full reasoning lives in `logging.py`'s module docstring, where somebody
+changing this will actually be standing; in short:
+
+- **Structured logging is not refused, it is deferred, and deferring is free.**
+  Field names are a public interface with no deprecation path — the first person
+  to grep `record_id` owns the name, and we cannot know whether they want
+  `record_id`, `recordId` or `zenodo.record.id` until such a consumer exists.
+  Today the only consumer we know of is our own CLI, whose audience is a human.
+  Crucially, loguru separates the record from its rendering: `logger.bind(...)`
+  attaches fields to the same call which produces the sentence, and a
+  `serialize=True` sink emits JSON while a text sink keeps printing prose.
+  Verified. So adding structure later is additive — no caller changes, no
+  migration — and "structured logs are hard to read" is the sink's problem, not
+  ours. There is no first-mover advantage to guessing a schema.
+- **"Both" does not dodge that.** With loguru, supporting humans and machines is
+  not two log calls; it is one call plus a sink choice. So option 3 pays the whole
+  cost of option 2 — naming the fields — while looking like a compromise.
+- **Dropping logging answers a narrower rule than it sounds.** The convention is
+  *do not configure logging, do emit it*. We comply: the package disables its own
+  logger on import and `setup_logging` is opt-in. Removing the messages would
+  blind the CLI's narrative and throw away diagnostics which have already earned
+  their place (retry attempts, MD5 timings, the request URL which reveals a
+  production token against the sandbox).
+- **Verbosity is a front-end, not an alternative** — `-v`/`-q` still resolve to a
+  level, and the level is the logger's. But the framing is the valuable part, and
+  it was a real gap: `--logging-level DEBUG` asked somebody to think in log levels
+  to control what is really progress reporting.
+  `get_level_from_verbosity` steps through `VERBOSITY_LEVELS` from `INFO`;
+  `--logging-level` and `--logging-config` stay for the diagnostic case.
+  `-v` with `-q`, or either with `--logging-level`, is **refused** rather than
+  resolved by precedence, because silently picking one would mean a flag the user
+  typed did nothing. Asking for more verbosity than exists is *not* an error
+  (`-vvvv` is `TRACE`): the flag can only have been meant kindly.
+
+The trigger to revisit is a real request — somebody asking how to get these into
+their log aggregator — because that request also supplies the field names.
+
+**The larger bet this reveals is loguru itself**, not the message format. loguru
+is a global singleton, so an application built on the standard library's `logging`
+needs an interception handler to capture our records at all, where
+`logging.getLogger(__name__)` would interoperate for free. If this package ends up
+embedded in applications with real log pipelines, that is the thing to reconsider,
+and the cost grows with every loguru-specific piece added (`tqdm_write_sink`,
+`setup_logging`, the `loguru-config` extra). Which is a further reason not to
+build a bespoke structured-field layer on top of it in the meantime.
+
 ---
 
 ## Part 3 — Two file-writing methods: `upload_files` and `mirror_files` — ✅ IMPLEMENTED
@@ -1269,7 +1384,41 @@ old `update-metadata --reserve-doi` CLI flag provided, as a proper method.
 
 ---
 
-## Part 8 — CLI: cut down to three commands
+## Part 8 — CLI: cut down to three commands — ✅ IMPLEMENTED
+
+**Done** (sequencing step 8, with Part 9). `cli/app.py` is the three commands over
+`ZenodoClient`, the legacy source and its tests are gone, and
+`grep -rn "TO BE DELETED" src tests docs` comes back empty. Deltas from the text
+below, all deliberate and all written into it in place:
+
+- **No `--draft` on `download-files`** (8.1), because Part 5 dropped the `draft`
+  argument everywhere: the record ID answers the question and `is_draft` asks it.
+- **`--zip` takes the archive name and always requires it**, rather than
+  `--zip [NAME]`, which typer cannot express portably — `flag_value` means
+  opposite things on our floor (0.10) and on current versions, and the
+  `lowest-direct` CI job installs the floor. `--zip` with `--mirror` is refused;
+  `--zip-base-dir` without `--zip` is refused.
+- **No `--no-verify-checksum` on `upload-files`**, matching `upload_files`, which
+  has no such argument for the reason given in Part 2. `download-files` keeps it.
+- **Our own errors are reported as a message, not a traceback.** A
+  `reported_cleanly` context manager catches `ZenodoError` and exits 1; a `401`/`403`
+  with a token adds a line naming `client.token_source`, never the token. Anything
+  which is not a `ZenodoError` still raises, because a traceback is what a bug
+  wants. The message is prefixed `Error: ` because `_handle_error_response` also
+  logs the failing response, so with logging on the text appears twice; the
+  alternative — trusting the log and staying quiet — breaks under `--no-logging`
+  and under any logging config which raises the level past `ERROR`, and a message
+  which is always there is worth more than a tidier default case.
+- **The token tests got stronger rather than just being ported.**
+  `tests/test_cli_tokens.py` now replaces the *session* instead of the client, so
+  it asserts on the `Authorization` header the CLI would have sent — the real
+  client, and therefore the real `resolve_token`, runs. `tests/test_cli.py` is new
+  and covers flag → method translation, including that `--mirror` calls
+  `mirror_files` and plain `upload-files` does not.
+- **CI no longer maps `ZENODO_SANDBOX_TOKEN` into `ZENODO_TOKEN`.** That mapping
+  existed only because the legacy code read `ZENODO_TOKEN` directly (see the
+  `legacy_zenodo_token` fixture, now deleted), so all three call sites in
+  `ci.yaml` now pass the sandbox variable under its own name.
 
 The `typer` app stays, but only for the tasks that are genuinely better from a
 shell — moving bytes in and out of Zenodo, and getting a citation string. The
@@ -1281,13 +1430,12 @@ belong in Python where the new schema (Part 6) can be built and validated.
 ```bash
 # Upload local files to a draft
 openscm-zenodo upload-files RECORD_ID FILE... \
-    [--n-threads 4] [--mirror] \
-    [--no-verify-checksum] [--no-progress] \
-    [--zip [NAME]] [--zip-base-dir DIR] [--no-warn-path-stripped]
+    [--n-threads 4] [--mirror] [--no-progress] \
+    [--zip NAME] [--zip-base-dir DIR] [--no-warn-path-stripped]
 
 # Download files from a published record, a draft, or a restricted/embargoed record
 openscm-zenodo download-files RECORD_ID [FILENAME...] \
-    [--dest-dir .] [--draft] [--n-threads 4] \
+    [--dest-dir .] [--n-threads 4] \
     [--overwrite] [--no-verify-checksum] [--no-progress]
 
 # Get a citation, BibTeX by default
@@ -1320,8 +1468,43 @@ Notes on each:
   for what it does. Warns when a local path is stripped, and `--zip` bundles
   everything into one archive to preserve structure (Part 11); grouping into
   several archives is Python-only.
+
+    **`--zip` takes the archive's name and always requires it** — this was
+    written as `--zip [NAME]`, an option with an optional value, which typer
+    cannot express portably. `is_flag=False, flag_value=...` is accepted by every
+    version we support but means different things across them: on `typer` 0.10
+    (our floor, and what the `lowest-direct` CI job installs) `--zip mine.zip`
+    fails with "Got unexpected extra argument", while on 0.16 `--zip` alone fails
+    with "Option '--zip' requires an argument". A flag whose meaning depends on
+    the resolved typer version is worse than typing the name, and the name is the
+    interesting part anyway since it is what lands on the record. The
+    alternative — a `--zip` boolean plus a separate `--zip-name` — buys the
+    default name back at the cost of a two-flag state machine with a no-op
+    combination to police.
+
+    There is **no `--no-verify-checksum` on `upload-files`** either, for the
+    reason `upload_files` has no `verify_checksum` argument (Part 2): working out
+    what to upload needs each local checksum anyway, so comparing it with what
+    Zenodo reports back is free, and an option to turn it off would drop a safety
+    net and save nothing. `download-files` keeps the option, where the work is
+    real.
+
+    Also, `--zip` and `--mirror` are refused together: the zip path goes through
+    `upload_files_as_zip`, which uploads one archive and has no mirroring, so the
+    combination would silently do only half of what it says. `--n-threads` and
+    `--no-warn-path-stripped` are inert under `--zip` (one file is uploaded, and
+    zipping is how paths are *kept*) rather than an error, since both have
+    defaults and cannot be distinguished from being unset.
 - **`download-files`** — wraps `download_files` (Part 5). `--dest-dir` defaults to
-  the current directory. `--draft` targets an unpublished draft.
+  the current directory. **There is no `--draft` flag**, because there is nothing
+  for one to disambiguate: a record ID already says whether it is published or
+  still a draft, `download_files` resolves it through `is_draft`, and an edit
+  draft of a published record has locked files so it *is* the published record as
+  far as files go (Part 5). An ID we cannot find raises `RecordNotFoundError`
+  naming the token's source, which is strictly better than a flag pointing us at
+  one endpoint and a bare `404` coming back. This paragraph used to specify
+  `--draft`; it was written before Part 5 landed and dropped the `draft` argument
+  everywhere.
   **Embargoed / restricted records need no special flag** — access is just the
   token on the session, so `ZENODO_TOKEN` (or `--token`) is the whole story
   (Part 5). A `403` surfaces as a clear "no access with this token" error rather
@@ -1338,7 +1521,8 @@ Both transfer commands show **one progress bar per file that disappears when tha
 file completes**, per the shared Part 2.1 contract; `--no-progress` forces them
 off, and they self-disable when stderr is not a TTY.
 
-Global options: `--token`, `--zenodo-domain`, `--version`, `--no-logging`,
+Global options: `--token`, `--zenodo-domain`, `--version`, **`-v`/`-q`** (see the
+verbosity note under Part 1's logging section), `--no-logging`,
 `--logging-level`, `--logging-config`, plus **`--env-file PATH`** and
 **`--no-env-file`** (Part 1.1.2). `--token` no longer declares typer's
 `envvar="ZENODO_TOKEN"`; it is passed through to `ZenodoClient(token=...)` and
@@ -1374,7 +1558,20 @@ it only because it wasn't in the keep-list.
   shrinks to the three retained commands, and `docs/cli/` documents them (with
   the embargoed-download example spelled out).
 - `setup_logging`, `get_default_config`, `mask_token`, `__version__` stay as
-  library functions used by the CLI. `loguru-config` stays an optional extra.
+  library functions used by the CLI. `loguru-config` stays an optional extra at
+  runtime, but is **now also a test dependency** (`tests-full`): being in no test
+  group is exactly how `--logging-config` came to be broken —
+  `setup_logging` called `LoguruConfig.load(path, configure=False)` and then
+  `.load()` on the result, which raises `TypeError` because `load` is a
+  classmethod wanting the config as its argument, so every file config failed.
+  It is now the three steps that were meant: `load(..., configure=False)` reads
+  the file, `parse()` resolves the references in it (`ext://sys.stderr` and
+  friends), `configure()` hands the result to loguru. `load()` on its own would
+  do the last two itself, but keeping them apart is what leaves room to look at
+  or change a configuration before applying it. Covered at both levels, plus a
+  test for the `ext://` form specifically, since that is the one which fails if
+  the parsing step is dropped — and every one of them was checked against the
+  broken code first.
 
 ### 8.4 The delete list
 
@@ -1413,7 +1610,45 @@ outside the legacy tests reading `ZENODO_TOKEN` directly.
 
 ---
 
-## Part 9 — Packaging, docs, tests
+## Part 9 — Packaging, docs, tests — ✅ IMPLEMENTED
+
+**Done** (sequencing step 8, with Part 8). Deltas from the text below:
+
+- **`tenacity>=8` and `python-dotenv>=1` were already declared**, added as the
+  parts which needed them landed. All that was left here was `"download"` in
+  `keywords`.
+- **The README has no examples to rewrite** — it is badges, status and install
+  instructions only, and links to the docs for everything else. Nothing was added
+  to it; the examples live where the docs build executes them.
+- **The hand-written CLI examples page is not part of this step.** `docs/cli/index.md`
+  is generated from the app by the `Makefile` target, so anything hand-written in
+  it is destroyed on the next build, which means Part 9's embargoed-download
+  example and citation format/style table need a page of their own. One was
+  written (`docs/cli/examples.md`) and then removed: `TODO.md` records the reason,
+  which is that the docs *structure* is an open question — Zenodo is complicated
+  enough that what it does and does not support has to be explained somewhere
+  (probably "further background"), leaving how-to guides and tutorials to explain
+  how to do things. Placing a CLI examples page before that is settled would be
+  guessing. **So Part 9's docs are complete except for those two pieces**, which
+  are deliberately parked, not forgotten.
+- **The migration guide is `docs/migration.md`**, linked from `NAVIGATION.md`
+  directly under Installation, since "prominent" means somebody upgrading finds it
+  without going looking.
+- **The version is not bumped here.** `uv version --bump` is driven by the
+  `bump.yaml` workflow at release time, so hand-editing `pyproject.toml`'s version
+  would fight it. `changelog/30.breaking.md` is written so the release leads with
+  the breaking change, which is the part which had to happen now; the major bump is
+  a release action.
+- **The old changelog had to be de-linked.** `docs/changelog.md` referenced
+  `ZenodoInteractor`, `retrieve_bibtex_entry` and `get_reserved_doi_legacy` through
+  mkdocstrings, which cannot resolve a symbol which no longer exists, so
+  `--strict` would fail on history. Those references are now plain code spans; the
+  entries still say what they said.
+- **Two unreleased fragments were corrected rather than left.**
+  `changelog/25.feature.md` and `28.feature.md` announced the `*_legacy` renames
+  and said "it goes when the command-line interface is trimmed". That is this step,
+  and they release together, so they would have told users about names which never
+  shipped. They now say the legacy functions are gone.
 
 - **pyproject.toml:** keep `[project.scripts]` and `typer` (Part 8); add
   `tenacity>=8` and `python-dotenv>=1` (CLI `.env` support, Part 1.1.2 — small,
@@ -1446,8 +1681,9 @@ outside the legacy tests reading `ZENODO_TOKEN` directly.
     `upload_files` never deletes and `mirror_files` does), `reserve_doi`, and
     `load_metadata`.
   - CLI tests for the three retained commands (Part 8): `upload-files` with and
-    without `--mirror`, `download-files` with `--draft` and with a subset of
-    filenames, and `retrieve-citation` across `--format`/`--style`.
+    without `--mirror`, `download-files` with a subset of filenames and with
+    none (meaning all of them), and `retrieve-citation` across
+    `--format`/`--style`.
   - Unit tests for the MD5 timing logs: with a `caplog`-style capture, assert
     the shared helper emits the start/completion `debug` records and the
     over-threshold `info`/`warning`, and that it is silent below the threshold.
@@ -2396,9 +2632,8 @@ not, and what to do next.
 
 | # | Work | Why it is next |
 |---|---|---|
-| **8** | **Trim the CLI + packaging/docs (Parts 8–9)** | The three retained commands (`upload-files`, `download-files`, `retrieve-citation`) are thin wrappers over methods which now all exist, so nothing blocks it. It also removes `ZenodoInteractor` and everything marked `TO BE DELETED` (§8.4), which is the bulk of the remaining diff. |
-| **2b** | **File-write guard (13.5, steps 1–4)** | `_assert_writable` on the file-write methods, plus the race-window fixes. **Not urgent**: 13.2 establishes that Zenodo already refuses every file write against a published record, so this is hardening and error quality. Can land either side of step 8. |
-| **9** | **Live-API suite sweep (Part 12)** | The 12.2 endpoint matrix is already fully ticked, so what is left is the scenario tests in 12.3 and wiring up the scheduled CI run — the standing guard against Zenodo changing under us. Do it last, once the CLI is settled. |
+| **2b** | **File-write guard (13.5, steps 1–4)** | `_assert_writable` on the file-write methods, plus the race-window fixes. **Not urgent**: 13.2 establishes that Zenodo already refuses every file write against a published record, so this is hardening and error quality. |
+| **9** | **Live-API suite sweep (Part 12)** | The 12.2 endpoint matrix is already fully ticked, so what is left is the scenario tests in 12.3 and wiring up the scheduled CI run — the standing guard against Zenodo changing under us. Do it last; the CLI is now settled, so the scenarios can be written against the shipped surface. |
 
 ### Done
 
@@ -2412,6 +2647,7 @@ not, and what to do next.
 | 5 | Uploads — `upload_file`, retry, checksums, progress bars (Part 2); path stripping, collisions, zipping (Part 11) | tops of Parts 2 and 11 |
 | 6 | Mirror + versions — `mirror_files`, `create_or_get_new_version`, `FilesMode` (Parts 3–4) | tops of Parts 3 and 4 |
 | 7 | Download — `download_file`, `download_files` (Part 5) | top of Part 5 |
+| 8 | CLI trimmed to three commands, legacy source and tests deleted, packaging/docs/migration guide (Parts 8–9) | tops of Parts 8 and 9 |
 
 They were taken out of order: uploads, mirror, versions and download (Parts 2–5)
 landed before the read paths and before the metadata schema, so the transport was

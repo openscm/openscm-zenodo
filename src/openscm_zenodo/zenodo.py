@@ -7,14 +7,14 @@ from __future__ import annotations
 import concurrent.futures
 import contextlib
 import hashlib
-import json
 import logging
 import os
 import os.path
 import tempfile
 import urllib.parse
-from collections.abc import Callable, Collection, Iterable, Mapping
+from collections.abc import Callable, Collection, Mapping
 from enum import Enum, auto
+from functools import partial
 from pathlib import Path
 from types import TracebackType
 from typing import (
@@ -27,8 +27,6 @@ from typing import (
 )
 
 import requests
-import tqdm
-import tqdm.utils
 from attrs import define, field
 from dotenv import find_dotenv, load_dotenv
 from loguru import logger
@@ -129,9 +127,6 @@ class RestAction(Enum):
 
     delete = auto()
     """Delete request"""
-
-
-MetadataType: TypeAlias = dict[str, dict[str, str]]
 
 
 class FilesMode(str, Enum):
@@ -1670,7 +1665,11 @@ class ZenodoClient:
         return f"{self.zenodo_domain_url}{path}"
 
     def _handle_error_response(
-        self, response: requests.models.Response, *, description: str
+        self,
+        response: requests.models.Response,
+        *,
+        description: str,
+        expected_errors: Collection[int] = (),
     ) -> NoReturn:
         """
         Raise the most helpful error we can for an unsuccessful response
@@ -1684,6 +1683,13 @@ class ZenodoClient:
             Description of the interaction, used in
             [`MissingTokenError`][openscm_zenodo.exceptions.MissingTokenError]
 
+        expected_errors
+            Status codes which are an ordinary answer here, not a failure.
+
+            These are logged at `debug` rather than `error`.
+            The exception raised does not change: the caller still has to
+            handle it, this only stops us shouting about an answer we asked for.
+
         Raises
         ------
         MissingTokenError
@@ -1693,7 +1699,11 @@ class ZenodoClient:
             Any other unsuccessful response
         """
         error = ZenodoHTTPError(response, token=self.token)
-        logger.error(str(error))
+        if response.status_code in expected_errors:
+            logger.debug(f"Expected, and handled by the caller: {error}")
+
+        else:
+            logger.error(str(error))
 
         unauthorised = (401, 403)
         if response.status_code in unauthorised and not self.token:
@@ -1714,6 +1724,7 @@ class ZenodoClient:
         description: str | None = None,
         timeout: int | None = None,
         headers: Mapping[str, str] | None = None,
+        expected_errors: Collection[int] = (),
         **kwargs: Any,
     ) -> requests.models.Response:
         """
@@ -1753,6 +1764,15 @@ class ZenodoClient:
 
             The `Authorization` header is added by us, per request,
             so it does not need to be included here.
+
+        expected_errors
+            Status codes which are an ordinary answer here, not a failure.
+
+            Pass these when you are asking a question whose answer can be "no",
+            e.g. looking for a draft which may not exist. They are logged at
+            `debug` instead of `error`, so a normal outcome does not look like a
+            problem. What is raised is unchanged, see
+            [`_handle_error_response`][openscm_zenodo.zenodo.ZenodoClient._handle_error_response].
 
         **kwargs
             Passed to
@@ -1809,7 +1829,9 @@ class ZenodoClient:
         )
 
         if not response.ok:
-            self._handle_error_response(response, description=description)
+            self._handle_error_response(
+                response, description=description, expected_errors=expected_errors
+            )
 
         return response
 
@@ -1857,13 +1879,13 @@ class ZenodoClient:
             Name of the file to delete, as it appears on Zenodo
         """
         record_id = get_record_id(record_id)
-        logger.info(f"Deleting {filename!r} from {record_id!r}")
         self._request(
             self._get_draft_file_path(record_id, filename),
             method="DELETE",
             requires_auth=True,
             description=f"delete {filename!r} from {record_id!r}",
         )
+        logger.info(f"Deleted {filename!r} from record {record_id!r}")
 
     def _initialise_file(self, record_id: str, filename: str) -> None:
         """
@@ -2173,7 +2195,7 @@ class ZenodoClient:
         """
         record_id = get_record_id(record_id)
         filename = path.name
-        logger.info(f"Uploading {path} as {filename!r} to record {record_id!r}")
+        logger.debug(f"Uploading {path} as {filename!r} to record {record_id!r}")
 
         if warn_path_stripped:
             warn_about_stripped_paths([path])
@@ -2202,7 +2224,7 @@ class ZenodoClient:
 
             raise
 
-        logger.info(f"Successfully uploaded {path} as {filename!r}")
+        logger.info(f"Uploaded {path} as {filename!r} to record {record_id!r}")
 
         return entry
 
@@ -2263,11 +2285,20 @@ class ZenodoClient:
             and "there is, but not for you",
             because from out here those are the same thing.
         """
+        nothing_for_us = (HTTP_FORBIDDEN, HTTP_NOT_FOUND)
         try:
-            self._request(path, requires_auth=requires_auth, description=description)
+            self._request(
+                path,
+                requires_auth=requires_auth,
+                description=description,
+                # This is a question, and `False` is one of its answers, so a
+                # `404` here is the answer rather than something going wrong.
+                # Without this, asking whether a draft exists logs an `ERROR`
+                # every time the answer is no.
+                expected_errors=nothing_for_us,
+            )
 
         except ZenodoHTTPError as exc:
-            nothing_for_us = (HTTP_FORBIDDEN, HTTP_NOT_FOUND)
             if exc.response.status_code not in nothing_for_us:
                 raise
 
@@ -2531,7 +2562,7 @@ class ZenodoClient:
 
         diff = self._diff_files(record_id, want)
 
-        logger.info(
+        logger.debug(
             f"Uploading {len(diff.to_upload)} file(s) to record {record_id!r}, "
             f"leaving {len(diff.unchanged)} unchanged file(s) alone"
         )
@@ -2542,6 +2573,11 @@ class ZenodoClient:
             n_threads=n_threads,
             progress=progress,
             max_attempts=max_attempts,
+        )
+
+        logger.info(
+            f"Uploaded {len(uploaded)} file(s) to record {record_id!r}, "
+            f"{len(diff.unchanged)} were already up to date"
         )
 
         return {**diff.remote, **uploaded}
@@ -2611,7 +2647,7 @@ class ZenodoClient:
 
         diff = self._diff_files(record_id, want)
 
-        logger.info(
+        logger.debug(
             f"Mirroring {len(paths)} file(s) onto record {record_id!r}: "
             f"uploading {len(diff.to_upload)}, "
             f"deleting {len(diff.to_delete)}, "
@@ -2636,6 +2672,13 @@ class ZenodoClient:
             for name, entry in diff.remote.items()
             if name not in diff.to_delete
         }
+
+        logger.info(
+            f"Record {record_id!r} now holds exactly {len(kept) + len(uploaded)} "
+            f"file(s): uploaded {len(uploaded)}, "
+            f"deleted {len(diff.to_delete)}, "
+            f"left {len(diff.unchanged)} unchanged"
+        )
 
         return {**kept, **uploaded}
 
@@ -2767,7 +2810,7 @@ class ZenodoClient:
         if not filenames:
             return
 
-        logger.info(f"Deleting {len(filenames)} file(s) from record {record_id!r}")
+        logger.debug(f"Deleting {len(filenames)} file(s) from record {record_id!r}")
 
         with get_files_progress_bar(
             desc="Deleting", total=len(filenames), progress=progress
@@ -2775,6 +2818,8 @@ class ZenodoClient:
             for filename in filenames:
                 self.delete_file(record_id, filename)
                 progress_bar.update(1)
+
+        logger.info(f"Deleted {len(filenames)} file(s) from record {record_id!r}")
 
     def delete_all_files(
         self, record_id: RecordIDLike, *, progress: bool = True
@@ -2836,7 +2881,7 @@ class ZenodoClient:
         ChecksumMismatchError
             `verify_checksum` is `True` and what arrived is not what was sent
         """
-        partial = target.with_name(f"{target.name}.part")
+        part_file = target.with_name(f"{target.name}.part")
         # MD5 because that is what Zenodo reports, not because we chose it
         hasher = hashlib.md5()  # noqa: S324
 
@@ -2856,7 +2901,7 @@ class ZenodoClient:
                     progress=progress,
                     position=position,
                 ) as progress_bar,
-                open(partial, "wb") as fh,
+                open(part_file, "wb") as fh,
             ):
                 for chunk in response.iter_content(chunk_size=1024 * 1024):
                     fh.write(chunk)
@@ -2872,13 +2917,13 @@ class ZenodoClient:
 
         except BaseException:
             # Whatever went wrong, do not leave half a file lying around
-            partial.unlink(missing_ok=True)
+            part_file.unlink(missing_ok=True)
 
             raise
 
         # Only now do we know the file is complete and correct,
         # so only now does it get the name callers will look for
-        partial.replace(target)
+        part_file.replace(target)
 
     def _download_entry(  # noqa: PLR0913
         self,
@@ -2950,7 +2995,7 @@ class ZenodoClient:
 
                 raise FileExistsError(msg)
 
-        logger.info(f"Downloading {entry.filename!r} to {target}")
+        logger.debug(f"Downloading {entry.filename!r} to {target}")
 
         retrying = _build_transfer_retrying(max_attempts)
         retrying(
@@ -2961,6 +3006,8 @@ class ZenodoClient:
             progress=progress,
             position=position,
         )
+
+        logger.info(f"Downloaded {entry.filename!r} to {target}")
 
         return target
 
@@ -3142,7 +3189,7 @@ class ZenodoClient:
         if not to_download:
             return []
 
-        logger.info(f"Downloading {len(to_download)} file(s) from {record_id!r}")
+        logger.debug(f"Downloading {len(to_download)} file(s) from {record_id!r}")
 
         if dest_per_file is None:
             cast(Path, dest).mkdir(parents=True, exist_ok=True)
@@ -3168,7 +3215,7 @@ class ZenodoClient:
                     max_attempts=max_attempts,
                 )
 
-        return _run_in_parallel(
+        downloaded = _run_in_parallel(
             download_one,
             to_download,
             n_threads=n_threads,
@@ -3176,7 +3223,13 @@ class ZenodoClient:
             progress=progress,
         )
 
-    def get_published(self, record_id: RecordIDLike) -> Record:
+        logger.info(f"Downloaded {len(downloaded)} file(s) from record {record_id!r}")
+
+        return downloaded
+
+    def get_published(
+        self, record_id: RecordIDLike, *, expected_errors: Collection[int] = ()
+    ) -> Record:
         """
         Get a published record
 
@@ -3184,6 +3237,14 @@ class ZenodoClient:
         ----------
         record_id
             ID of the record to get
+
+        expected_errors
+            Status codes which are an ordinary answer here, not a failure.
+
+            Pass these when a miss is one of the answers you are looking for:
+            they are logged at `debug` rather than `error`, so asking a question
+            does not look like something going wrong. What is raised does not
+            change, so the caller still has to handle it.
 
         Returns
         -------
@@ -3209,17 +3270,27 @@ class ZenodoClient:
         '10.5281/zenodo.4589756'
         """
         record_id = get_record_id(record_id)
-        logger.info(f"Retrieving published record {record_id!r}")
+        if expected_errors:
+            # The caller is working out what this record is, so say that we are
+            # trying an endpoint rather than announcing a retrieval
+            logger.debug(
+                f"Seeing if we can get record {record_id!r} from the published endpoint"
+            )
 
         response = self._request(
             f"/api/records/{record_id}",
             headers={"Accept": INVENIORDM_JSON_ACCEPT},
             description=f"get published record {record_id!r}",
+            expected_errors=expected_errors,
         )
+
+        logger.info(f"Retrieved published record {record_id!r}")
 
         return Record.from_json(response.json())
 
-    def _get_draft_document(self, record_id: str | RecordID) -> Record:
+    def _get_draft_document(
+        self, record_id: str | RecordID, *, expected_errors: Collection[int] = ()
+    ) -> Record:
         """
         Get whatever Zenodo serves from a record's draft endpoint
 
@@ -3232,6 +3303,9 @@ class ZenodoClient:
         ----------
         record_id
             ID of the record whose draft endpoint to read
+
+        expected_errors
+            Status codes which are an ordinary answer here, not a failure
 
         Returns
         -------
@@ -3248,6 +3322,7 @@ class ZenodoClient:
             requires_auth=True,
             headers={"Accept": INVENIORDM_JSON_ACCEPT},
             description=f"hit the draft endpoint of record {record_id!r}",
+            expected_errors=expected_errors,
         )
 
         return Record.from_json(response.json())
@@ -3286,10 +3361,16 @@ class ZenodoClient:
             Anything else, e.g. we may not see this record
         """
         record_id = get_record_id(record_id)
-        logger.info(f"Retrieving draft record {record_id!r}")
+        logger.debug(f"Looking for a draft of record {record_id!r}")
 
         try:
-            draft = self._get_draft_document(record_id)
+            # A `404` is not a failure here, it is the thing we go on to explain
+            # below, as either `PublishedRecordDraftError` or
+            # `RecordNotFoundError`. Logging the raw response as an error too
+            # would mean shouting twice about one outcome, once less usefully.
+            draft = self._get_draft_document(
+                record_id, expected_errors=(HTTP_NOT_FOUND,)
+            )
 
         except ZenodoHTTPError as exc:
             if exc.response.status_code != HTTP_NOT_FOUND:
@@ -3311,6 +3392,8 @@ class ZenodoClient:
             raise PublishedRecordDraftError(
                 str(record_id), zenodo_domain=self.zenodo_domain_url
             )
+
+        logger.info(f"Retrieved draft record {record_id!r}")
 
         return draft
 
@@ -3351,16 +3434,20 @@ class ZenodoClient:
                 str(record_id), zenodo_domain=self.zenodo_domain_url
             )
 
-        logger.info(f"Retrieving the metadata edits on record {record_id!r}")
+        logger.debug(f"Looking for metadata edits on record {record_id!r}")
 
         try:
-            return self._get_draft_document(record_id)
+            edits = self._get_draft_document(record_id)
 
         except ZenodoHTTPError as exc:
             if exc.response.status_code != HTTP_NOT_FOUND:
                 raise
 
             raise self._explain_missing_draft(record_id) from exc
+
+        logger.info(f"Retrieved the metadata edits on record {record_id!r}")
+
+        return edits
 
     def create_or_get_edited_metadata_draft(self, record_id: RecordIDLike) -> Record:
         """
@@ -3414,7 +3501,7 @@ class ZenodoClient:
                 str(record_id), zenodo_domain=self.zenodo_domain_url
             )
 
-        logger.info(f"Getting (or starting) metadata edits on record {record_id!r}")
+        logger.debug(f"Getting (or starting) metadata edits on record {record_id!r}")
 
         response = self._request(
             f"/api/records/{record_id}/draft",
@@ -3423,6 +3510,8 @@ class ZenodoClient:
             headers={"Accept": INVENIORDM_JSON_ACCEPT},
             description=f"start metadata edits on record {record_id!r}",
         )
+
+        logger.info(f"Metadata edits are open on record {record_id!r}")
 
         return Record.from_json(response.json())
 
@@ -3525,8 +3614,15 @@ class ZenodoClient:
         False
         """
         record_id = get_record_id(record_id)
+        # No `info` line here: this method does no work of its own, and whichever
+        # of the two endpoints answers logs what it found
+        nothing_for_us = (HTTP_FORBIDDEN, HTTP_NOT_FOUND)
         for getter, needs_token in (
-            (self.get_published, False),
+            # Looking for the published record is a question here, not a demand,
+            # so a miss is logged quietly: for a draft, which is half of what
+            # this method is for, missing it is the normal path. `get_draft`
+            # keeps its own `404` quiet for the same reason.
+            (partial(self.get_published, expected_errors=nothing_for_us), False),
             (self.get_draft, True),
         ):
             if needs_token and not self.token:
@@ -3536,7 +3632,6 @@ class ZenodoClient:
                 return getter(record_id)
 
             except ZenodoHTTPError as exc:
-                nothing_for_us = (HTTP_FORBIDDEN, HTTP_NOT_FOUND)
                 if exc.response.status_code not in nothing_for_us:
                     raise
 
@@ -3586,7 +3681,8 @@ class ZenodoClient:
         'Zebedee Nicholls'
         """
         record_id = get_record_id(record_id)
-        logger.info(f"Retrieving the metadata of record {record_id!r}")
+        # `get_record` reports what it found, so this only records what was asked
+        logger.debug(f"Retrieving the metadata of record {record_id!r}")
 
         return self.get_record(record_id).metadata
 
@@ -3760,7 +3856,7 @@ class ZenodoClient:
         Zenodo. https://doi.org/10.5281/zenodo.4589756
         """
         record_id = get_record_id(record_id)
-        logger.info(f"Retrieving the {fmt.value} citation of record {record_id!r}")
+        logger.debug(f"Retrieving record {record_id!r} as {fmt.value}")
 
         response = self._request(
             f"/api/records/{record_id}",
@@ -3771,8 +3867,10 @@ class ZenodoClient:
                 locale=locale,
                 warn_unknown_style=warn_unknown_style,
             ),
-            description=f"get the {fmt.value} citation of record {record_id!r}",
+            description=f"get record {record_id!r} as {fmt.value}",
         )
+
+        logger.info(f"Retrieved record {record_id!r} as {fmt.value}")
 
         return response.text
 
@@ -3838,7 +3936,7 @@ class ZenodoClient:
             ID of the new version
         """
         record_id = get_record_id(record_id)
-        logger.info(f"Creating a new version of record {record_id!r}")
+        logger.debug(f"Creating a new version of record {record_id!r}")
 
         response = self._request(
             f"/api/records/{record_id}/versions",
@@ -3883,19 +3981,21 @@ class ZenodoClient:
         already_there = self._list_files_at(record_id, draft=True)
         if already_there:
             logger.info(
-                f"Not importing files into record {record_id!r}, "
+                f"Did not import files into record {record_id!r}, "
                 f"it already has {len(already_there)} file(s)"
             )
 
             return False
 
-        logger.info(f"Importing the previous version's files into {record_id!r}")
+        logger.debug(f"Importing the previous version's files into {record_id!r}")
         self._request(
             f"/api/records/{record_id}/draft/actions/files-import",
             method="POST",
             requires_auth=True,
             description=f"import files into record {record_id!r}",
         )
+
+        logger.info(f"Imported the previous version's files into record {record_id!r}")
 
         return True
 
@@ -4120,7 +4220,7 @@ class ZenodoClient:
         :
             The new record
         """
-        logger.info("Creating a record")
+        logger.debug("Creating a record")
 
         response = self._request(
             "/api/records",
@@ -4221,7 +4321,7 @@ class ZenodoClient:
             warn_unknown_vocabulary=warn_unknown_vocabulary,
         )
 
-        logger.info(f"Updating the metadata of record {record_id!r}")
+        logger.debug(f"Updating the metadata of record {record_id!r}")
         logger.debug(f"New metadata: {metadata_json}")
 
         try:
@@ -4238,6 +4338,8 @@ class ZenodoClient:
             self._raise_for_missing_draft(exc, record_id=record_id, what="metadata")
 
         updated = Record.from_json(response.json())
+
+        logger.info(f"Updated the metadata of record {record_id!r}")
 
         if warn_discarded:
             self._warn_about_discarded_metadata(
@@ -4309,7 +4411,7 @@ class ZenodoClient:
         except ZenodoHTTPError as exc:
             self._raise_for_missing_draft(exc, record_id=record_id, what="access")
 
-        logger.info(f"Updating the access of record {record_id!r}")
+        logger.debug(f"Updating the access of record {record_id!r}")
         access_json = access.to_json()
         logger.debug(f"New access: {access_json}")
 
@@ -4335,6 +4437,8 @@ class ZenodoClient:
             self._raise_for_refused_access(exc, record_id=record_id)
 
         updated = Record.from_json(response_json)
+
+        logger.info(f"Updated the access of record {record_id!r}")
 
         if warn_ignored:
             self._warn_about_ignored(
@@ -4414,7 +4518,7 @@ class ZenodoClient:
 
             return existing
 
-        logger.info(f"Reserving a DOI for record {record_id!r}")
+        logger.debug(f"Reserving a DOI for record {record_id!r}")
 
         try:
             response_json = self._request(
@@ -4553,7 +4657,7 @@ class ZenodoClient:
                 description=f"publish record {record_id!r}"
             )
 
-        logger.info(f"Publishing record {record_id!r}")
+        logger.debug(f"Publishing record {record_id!r}")
 
         response = self._request(
             f"/api/records/{record_id}/draft/actions/publish",
@@ -4563,823 +4667,9 @@ class ZenodoClient:
         )
         published_id = RecordID(str(response.json()["id"]))
 
-        logger.info(f"Successfully published record {published_id!r}")
+        logger.info(f"Published record {published_id!r}")
 
         return published_id
-
-
-@define
-class ZenodoInteractor:
-    """
-    Class for interacting with Zenodo, over the legacy deposit API
-
-    **TO BE DELETED** when the CLI is trimmed (Part 8), along with every
-    `*_legacy` function. It is kept only so that the current command-line
-    interface keeps working while the rewrite lands.
-    Use [`ZenodoClient`][openscm_zenodo.zenodo.ZenodoClient] instead.
-    """
-
-    token: str | None = field(default=None, repr=lambda value: "***")
-    """Token to use for authenticating interactions with the Zenodo domain"""
-
-    zenodo_domain: str | ZenodoDomain = ZenodoDomain.production
-    """Zenodo domain to interact with"""
-
-    timeout: int = 10
-    """Timeout to apply to requests calls"""
-
-    timeout_upload: int = 60 * 60
-    """Timeout to apply to uploads"""
-
-    def create_new_version_from_latest(
-        self,
-        latest_deposition_id: str,
-    ) -> requests.models.Response:
-        """
-        Create a new version of a record from the latest deposition ID
-
-        Parameters
-        ----------
-        latest_deposition_id
-            The ID of the latest deposition.
-
-            This is the ID of the latest version from a collection of records.
-            For example, if there is v1.0.0, v2.0.0 and v3.0.0 on Zenodo,
-            this should be the deposition ID of v3.0.0.
-
-        Returns
-        -------
-        :
-            The new version's record from Zenodo
-
-        Notes
-        -----
-        From https://developers.zenodo.org/#new-version
-
-        ...
-        - The id used to create this new version has to be the id of the latest version.
-          It is not possible to use the global id that references all the versions.
-
-        We replicate this logic here.
-        To create a new version from the all records ID that references all
-        versions, use
-        [`create_or_get_new_version`][openscm_zenodo.zenodo.create_or_get_new_version].
-        """
-        logger.info(f"Creating a new version from {latest_deposition_id=!r}")
-
-        try:
-            create_new_version_response = self.get_response(
-                post_domain_part=f"/api/deposit/depositions/{latest_deposition_id}/actions/newversion",
-                rest_action=RestAction.post,
-            )
-            logger.info(
-                "Successfully created new version. "
-                "The new version's deposition id is "
-                f"{create_new_version_response.json()['id']!r}"
-            )
-
-        except requests.exceptions.HTTPError as exc:
-            exc_response_json = exc.response.json()
-            if (
-                exc_response_json["errors"][0]["messages"][0]
-                == "Please remove all files first."
-            ):
-                # TODO: consider just not raising an error in this case
-                msg = (
-                    "You must remove all the files in the current draft version "
-                    "before you can call the 'create a new version' "
-                    "API again without error. "
-                    "Having said that, this error means that you already have a draft, "
-                    "hence you probably don't need to call the "
-                    "'create a new version' API in the first place."
-                )
-
-                raise AssertionError(msg) from exc
-
-            raise
-
-        # I am pretty sure the below text from https://developers.zenodo.org/#new-version
-        # is wrong because the above appears to return the new version's record.
-        #
-        # Text I think is wrong from https://developers.zenodo.org/#new-version:
-        #
-        # - The response body of this action
-        #   is NOT the new version deposit, but the original resource.
-        #   The new version deposition can be accessed through the "latest_draft"
-        #   under "links" in the response body.
-
-        return create_new_version_response
-
-    def delete_deposition(self, deposition_id: str) -> None:
-        """
-        Delete a deposition
-
-        Note that this only works on draft depositions.
-
-        Parameters
-        ----------
-        deposition_id
-            Deposition ID to delete
-        """
-        logger.info(f"Deleting {deposition_id=!r}")
-        self.get_response(
-            f"/api/deposit/depositions/{deposition_id}",
-            rest_action=RestAction.delete,
-        )
-        logger.info(f"Successfully deleted {deposition_id=!r}")
-
-    def get_bibtex_entry(
-        self,
-        deposition_id: str,
-    ) -> str:
-        """
-        Get the bibtex entry for a given deposition ID
-
-        Parameters
-        ----------
-        deposition_id
-            The ID of the deposition
-
-        Returns
-        -------
-        :
-            Bibtex entry for `deposition_id`.
-        """
-        logger.info(f"Retrieving bibtex entry for {deposition_id=!r}")
-        response = self.get_response(f"/records/{deposition_id}/export/bibtex")
-
-        bibtex_entry = response.text
-
-        return bibtex_entry
-
-    def get_bucket_url(self, deposition_id: str) -> str:
-        """
-        Get the bucket URL for a given deposition ID
-
-        Parameters
-        ----------
-        deposition_id
-            Deposition ID for which to get the bucket URL
-
-        Returns
-        -------
-        :
-            Bucket URL for `deposition_id`
-        """
-        logger.info(f"Retrieving bucket URL for {deposition_id=!r}")
-
-        deposit_id_response = self.get_response(
-            post_domain_part=f"/api/deposit/depositions/{deposition_id}",
-        )
-
-        bucket_url = str(deposit_id_response.json()["links"]["bucket"])
-        logger.info(f"Successfully retrieved {bucket_url=!r} for {deposition_id=!r}")
-
-        return bucket_url
-
-    def get_concept_id(self, any_deposition_id: str) -> str:
-        """
-        Get the concept ID for a deposition
-
-        The concept ID is the ID that is associated with all versions of a record.
-
-        Parameters
-        ----------
-        any_deposition_id
-            Any deposition ID in the concept
-
-        Returns
-        -------
-        :
-            Concept ID
-        """
-        concept_id = str(
-            self.get_record(record_id=any_deposition_id).json()["conceptrecid"]
-        )
-
-        return concept_id
-
-    def get_deposition(
-        self,
-        deposition_id: str,
-    ) -> requests.models.Response:
-        """
-        Get a deposition from Zenodo
-
-        Parameters
-        ----------
-        deposition_id
-            The ID of the deposition
-
-        Returns
-        -------
-        :
-            The Zenodo deposition
-        """
-        logger.info(f"Retrieving deposition {deposition_id!r}")
-        response = self.get_response(f"/api/deposit/depositions/{deposition_id}")
-
-        return response
-
-    def get_draft_deposition_id(self, latest_deposition_id: str) -> str:
-        """
-        Get the deposition ID for a draft
-
-        If no draft exists, it is created from the latest deposition ID.
-        Otherwise, the existing draft is returned.
-
-        Parameters
-        ----------
-        latest_deposition_id
-            ID of the latest deposition
-
-        Returns
-        -------
-        :
-            ID of the draft deposition
-        """
-        draft_deposition_id: None | str = None
-        try:
-            draft_deposition_id = self.create_new_version_from_latest(
-                latest_deposition_id=latest_deposition_id
-            ).json()["id"]
-
-        except AssertionError:
-            concept_id_record = self.get_record(record_id=latest_deposition_id).json()[
-                "conceptrecid"
-            ]
-
-            drafts = self.get_response(
-                post_domain_part="/api/deposit/depositions",
-                rest_action=RestAction.get,
-                params={"status": "draft"},
-            ).json()
-            for draft in drafts:
-                if draft["conceptrecid"] == concept_id_record:
-                    draft_deposition_id = draft["record_id"]
-                    break
-
-        if draft_deposition_id is None:
-            msg = "Should have created a new draft or found an existing draft"
-            raise AssertionError(msg)
-
-        return draft_deposition_id
-
-    def get_latest_deposition_id(
-        self,
-        any_deposition_id: str,
-    ) -> str:
-        """
-        Get the latest deposition ID from any deposition ID which is part of the record
-
-        For example, we can take the deposition ID
-        from the first version of a record which was published
-        and always be given back the deposition ID of the latest record in the series.
-
-        Parameters
-        ----------
-        any_deposition_id
-            Any deposition ID which belongs to the series/record of interest.
-
-            This can be obtained from the URL of any deposit in the series.
-            For example, if the Zenodo URL is
-            https://sandbox.zenodo.org/records/101709,
-            then you can pass in "101709" as `any_deposition_id`.
-
-        Returns
-        -------
-        :
-            ID of the latest deposition in the series/record
-        """
-        logger.info(
-            "Retrieving the ID of the latest deposition in the series "
-            f"which includes deposition ID {any_deposition_id!r}"
-        )
-        record = self.get_record(record_id=any_deposition_id)
-        record_json = record.json()
-
-        record_latest = requests.get(
-            record_json["links"]["latest"], timeout=self.timeout
-        )
-
-        latest_deposition_id = str(record_latest.json()["id"])
-        logger.info(
-            f"For deposition ID {any_deposition_id!r}, "
-            "the ID of the latest deposition in the series is "
-            f"{latest_deposition_id!r}"
-        )
-
-        return latest_deposition_id
-
-    def get_metadata(
-        self,
-        deposition_id: str,
-        user_controlled_only: bool = False,
-    ) -> MetadataType:
-        """
-        Get the metadata for a given deposition ID
-
-        Parameters
-        ----------
-        deposition_id
-            The ID of the deposition
-
-        user_controlled_only
-            Only return metadata keys that the user can control.
-
-            If this is `True`, the metadata keys controlled by Zenodo
-            (e.g. the DOI)
-            are removed from the returned metadata.
-            This flag is important to use
-            if you want to use the retrieved metadata
-            as the starting point for the next version of a deposit.
-
-        Returns
-        -------
-        :
-            Metadata, in a form which could be used directly with the Zenodo API
-
-            For an example, see the docstring of
-            [`retrieve_metadata`][openscm_zenodo.zenodo.retrieve_metadata].
-        """
-        logger.info(f"Retrieving metadata for {deposition_id=!r}")
-        if self.token:
-            deposition = self.get_deposition(deposition_id)
-
-        else:
-            deposition = self.get_record(deposition_id)
-
-        metadata = {"metadata": deposition.json()["metadata"]}
-
-        if user_controlled_only:
-            for k in [
-                "doi",
-                "imprint_publisher",
-                "prereserve_doi",
-                "publication_date",
-                "relations",
-            ]:
-                if k in metadata["metadata"]:
-                    metadata["metadata"].pop(k)
-
-        return metadata
-
-    def get_record(
-        self,
-        record_id: str,
-    ) -> requests.models.Response:
-        """
-        Get a record from Zenodo
-
-        Parameters
-        ----------
-        record_id
-            The ID of the record
-
-        Returns
-        -------
-        :
-            The Zenodo record
-        """
-        logger.info(f"Retrieving record {record_id!r}")
-        response = self.get_response(f"/api/records/{record_id}")
-
-        return response
-
-    def get_response(
-        self,
-        post_domain_part: str,
-        rest_action: RestAction = RestAction.get,
-        params: dict[str, str] | None = None,
-        **kwargs: Any,
-    ) -> requests.models.Response:
-        """
-        Get a response from Zenodo
-
-        Parameters
-        ----------
-        post_domain_part
-            The post-domain part of the URL to hit.
-
-            In other words, the API to hit.
-            For example, "/api/deposit/depositions/1858949"
-
-        params
-            Headers to use as part of the request.
-
-            The authentication token is automatically added
-            before passing to the relevant requests action
-            so you don't need to included that in `params`.
-
-        **kwargs
-            Passed to the relevant requests action.
-
-        Returns
-        -------
-        :
-            Response from the URL that was hit
-        """
-        if isinstance(self.zenodo_domain, ZenodoDomain):
-            zenodo_domain = self.zenodo_domain.value
-
-        else:
-            zenodo_domain = self.zenodo_domain
-
-        if params is None:
-            params = {}
-
-        if self.token:
-            params["access_token"] = self.token
-
-        url_to_hit = f"{zenodo_domain}{post_domain_part}"
-        # Mask just in case the user put the token in the URL by accident
-        logger.debug(
-            f"Sending {rest_action} request to "
-            f"{mask_token(url_to_hit, token=self.token)}"
-        )
-
-        requests_kwargs = dict(
-            params=params,
-            **kwargs,
-        )
-        if rest_action == RestAction.get:
-            response = requests.get(url_to_hit, **requests_kwargs, timeout=self.timeout)
-
-        elif rest_action == RestAction.post:
-            response = requests.post(
-                url_to_hit, **requests_kwargs, timeout=self.timeout
-            )
-
-        elif rest_action == RestAction.put:
-            response = requests.put(url_to_hit, **requests_kwargs, timeout=self.timeout)
-
-        elif rest_action == RestAction.delete:
-            response = requests.delete(
-                url_to_hit, **requests_kwargs, timeout=self.timeout
-            )
-
-        else:
-            raise NotImplementedError(rest_action)
-
-        try:
-            response.raise_for_status()
-        except requests.exceptions.HTTPError:
-            print(response.json())
-            raise
-
-        return response
-
-    def publish(self, deposition_id: str) -> requests.models.Response:
-        """
-        Publish a deposition
-
-        Note that this only works on draft depositions.
-
-        Parameters
-        ----------
-        deposition_id
-            Deposition ID to publish
-
-        Returns
-        -------
-        :
-            Response from the publish request
-        """
-        logger.info(f"Publishing {deposition_id=!r}")
-        response = self.get_response(
-            f"/api/deposit/depositions/{deposition_id}/actions/publish",
-            rest_action=RestAction.post,
-        )
-        logger.info(f"Successfully published {deposition_id=!r}")
-
-        return response
-
-    def remove_all_files(
-        self,
-        deposition_id: str,
-        # # Off until parallelism works
-        # n_threads: int = 4
-    ) -> tuple[requests.models.Response, ...]:
-        """
-        Remove all the files currently associated with a given deposition
-
-        Parameters
-        ----------
-        deposition_id
-            Deposition ID from which to remove all files
-
-        Returns
-        -------
-        :
-            The response(s) from the file removal request(s)
-        """
-        logger.info(f"Removing all files from {deposition_id=!r}")
-        files_response = self.get_response(
-            f"/api/deposit/depositions/{deposition_id}/files",
-        )
-
-        file_ids_to_remove = [v["id"] for v in files_response.json()]
-
-        return self.remove_files_by_id(
-            deposition_id=deposition_id,
-            file_ids_to_remove=file_ids_to_remove,
-            # n_threads=n_threads,
-        )
-
-    def remove_file_id(
-        self,
-        deposition_id: str,
-        to_remove_id: str,
-    ) -> requests.models.Response:
-        """
-        Remove a file from a deposition, using its ID
-
-        Parameters
-        ----------
-        deposition_id
-            ID of the deposition to alter
-
-        to_remove_id
-            ID of the file to remove
-
-        Returns
-        -------
-        :
-            The response from the file removal request
-        """
-        response = self.get_response(
-            f"/api/deposit/depositions/{deposition_id}/files/{to_remove_id}",
-            rest_action=RestAction.delete,
-        )
-
-        return response
-
-    def remove_files(
-        self,
-        deposition_id: str,
-        to_remove: Collection[Path],
-        # # Off until parallelism works
-        # n_threads: int = 4,
-    ) -> tuple[requests.models.Response, ...]:
-        """
-        Remove file(s) from a deposition
-
-        Parameters
-        ----------
-        deposition_id
-            ID of the deposition to alter
-
-        to_remove
-            File(s) to remove
-
-        Returns
-        -------
-        :
-            The response(s) from the file removal request(s)
-        """
-        logger.info(
-            f"Removing {len(to_remove)} {'files' if len(to_remove) > 1 else 'file'} "
-            f"from {deposition_id=!r}"
-        )
-        filenames_to_delete = set(f.name for f in to_remove)
-
-        files_response = self.get_response(
-            f"/api/deposit/depositions/{deposition_id}/files",
-        )
-        file_ids_to_remove = [
-            v["id"]
-            for v in files_response.json()
-            if v["filename"] in filenames_to_delete
-        ]
-
-        return self.remove_files_by_id(
-            file_ids_to_remove=file_ids_to_remove,
-            deposition_id=deposition_id,
-        )
-
-    def remove_files_by_id(
-        self,
-        deposition_id: str,
-        file_ids_to_remove: Iterable[str],
-        # Off until parallelism works
-        # n_threads: int = 4,
-    ) -> tuple[requests.models.Response, ...]:
-        """
-        Remove file(s) from a deposition, using their IDs
-
-        Parameters
-        ----------
-        deposition_id
-            ID of the deposition to alter
-
-        file_ids_to_remove
-            ID of file(s) to remove
-
-        Returns
-        -------
-        :
-            The response(s) from the file removal request(s)
-        """
-        # Wanted to do this in parallel, but weirdly flaky
-        responses = tuple(
-            [
-                self.remove_file_id(deposition_id=deposition_id, to_remove_id=file_id)
-                for file_id in tqdm.tqdm(file_ids_to_remove, desc="Files to remove")
-            ]
-        )
-        # with concurrent.futures.ThreadPoolExecutor(max_workers=n_threads) as executor:
-        #     futures = [
-        #         executor.submit(
-        #             self.remove_file_id,
-        #             to_remove_id=file_id,
-        #             deposition_id=deposition_id,
-        #         )
-        #         for file_id in tqdm.tqdm(
-        #             file_ids_to_remove, desc="Submitting files to queue"
-        #         )
-        #     ]
-        #
-        #     responses = tuple(
-        #         [
-        #             future.result()
-        #             for future in tqdm.tqdm(
-        #                 concurrent.futures.as_completed(futures),
-        #                 desc="Files to remove",
-        #                 total=len(futures),
-        #             )
-        #         ]
-        #     )
-
-        return responses
-
-    def upload_file_to_bucket_url(
-        self,
-        to_upload: Path,
-        bucket_url: str,
-        tqdm_kwargs: dict[str, Any] | None = None,
-    ) -> requests.models.Response:
-        """
-        Upload a file to a bucket URL
-
-        This is a relatively low-level function,
-        which requires you to have already determined
-        the bucket URL to upload to yourself.
-
-        Note that zenodo does not allow you to upload folders.
-        As noted in [this response](https://support.zenodo.org/help/en-gb/1-upload-deposit/74-can-i-upload-folders-directories):
-
-        > Instead, you can create a ZIP archive and upload it,
-        > in which case Zenodo will display the file structure inside the ZIP.
-
-        Parameters
-        ----------
-        to_upload
-            File to upload
-
-        bucket_url
-            The bucket URL to use for the upload
-
-        tqdm_kwargs
-            Keyword arguments to use with our progress bar.
-
-            If not supplied, we use
-            [`TQDM_UPLOAD_PROGRESS_KWARGS_DEFAULT`][openscm_zenodo.zenodo.TQDM_UPLOAD_PROGRESS_KWARGS_DEFAULT].
-
-        Returns
-        -------
-        :
-            The response from the file upload request
-        """
-        if tqdm_kwargs is None:
-            tqdm_kwargs = TQDM_UPLOAD_PROGRESS_KWARGS_DEFAULT
-
-        upload_url = f"{bucket_url}/{to_upload.name}"
-
-        logger.info(f"Uploading {to_upload} to {upload_url=!r}")
-
-        file_size = os.stat(to_upload).st_size
-        with tqdm.tqdm(total=file_size, **tqdm_kwargs) as tqdm_bar:
-            with open(to_upload, "rb") as file_handle:
-                wrapped_file = tqdm.utils.CallbackIOWrapper(
-                    tqdm_bar.update, file_handle, "read"
-                )
-                response = requests.put(
-                    upload_url,
-                    data=wrapped_file,
-                    params={"access_token": self.token},
-                    timeout=self.timeout_upload,
-                )
-
-        response.raise_for_status()
-        logger.info(f"Successfully uploaded {to_upload}")
-        return response
-
-    def upload_files(
-        self,
-        deposition_id: str,
-        to_upload: Collection[Path],
-        tqdm_kwargs: dict[str, Any] | None = None,
-        n_threads: int = 4,
-    ) -> tuple[requests.models.Response, ...]:
-        """
-        Upload file(s) to a deposition
-
-        Note that zenodo does not allow you to upload folders.
-        As noted in [this response](https://support.zenodo.org/help/en-gb/1-upload-deposit/74-can-i-upload-folders-directories):
-
-        > Instead, you can create a ZIP archive and upload it,
-        > in which case Zenodo will display the file structure inside the ZIP.
-
-        Parameters
-        ----------
-        deposition_id
-            ID of the deposition to upload to
-
-        to_upload
-            File(s) to upload
-
-        tqdm_kwargs
-            Keyword arguments to use with our progress bar.
-
-            Passed to
-            [`upload_file_to_bucket_url`][openscm_zenodo.zenodo.ZenodoInteractor.upload_file_to_bucket_url].
-
-        n_threads
-            Number of threads to use for the uploads.
-
-        Returns
-        -------
-        :
-            The response(s) from the file upload request(s)
-        """
-        logger.info(
-            f"Uploading {len(to_upload)} {'files' if len(to_upload) > 1 else 'file'} "
-            f"to {deposition_id=!r}"
-        )
-        bucket_url = self.get_bucket_url(deposition_id)
-
-        with concurrent.futures.ThreadPoolExecutor(max_workers=n_threads) as executor:
-            futures = [
-                executor.submit(
-                    self.upload_file_to_bucket_url,
-                    to_upload=file,
-                    bucket_url=bucket_url,
-                    tqdm_kwargs=tqdm_kwargs,
-                )
-                for file in tqdm.tqdm(to_upload, desc="Submitting files to queue")
-            ]
-
-            responses = tuple(
-                [
-                    future.result()
-                    for future in tqdm.tqdm(
-                        concurrent.futures.as_completed(futures),
-                        desc="Files to upload",
-                        total=len(futures),
-                    )
-                ]
-            )
-
-        return responses
-
-    def update_metadata(
-        self, deposition_id: str, metadata: MetadataType
-    ) -> requests.models.Response:
-        """
-        Update the metadata for a given deposition
-
-        Parameters
-        ----------
-        deposition_id
-            Deposition ID of which to update the metadata
-
-        metadata
-            Metadata to apply to the deposition
-
-            For the complete list of supported key : value pairs supported by Zenodo,
-            see [https://developers.zenodo.org/#representation]().
-            You do not need to provide values for all the metadata keys,
-            only the ones relevant to you.
-
-            For an example, see the docstring of
-            [`retrieve_metadata`][openscm_zenodo.zenodo.retrieve_metadata].
-
-        Returns
-        -------
-        :
-            Response to the metadata update request.
-        """
-        logger.info(f"Updating metadata for {deposition_id=!r}")
-        logger.debug(f"New metadata: {metadata}")
-
-        update_metadata_response = self.get_response(
-            post_domain_part=f"/api/deposit/depositions/{deposition_id}",
-            rest_action=RestAction.put,
-            data=json.dumps(metadata),
-            headers={"Content-Type": "application/json"},
-        )
-
-        return update_metadata_response
 
 
 def retrieve_metadata(
@@ -5494,154 +4784,6 @@ def retrieve_citation(  # noqa: PLR0913
         locale=locale,
         warn_unknown_style=warn_unknown_style,
     )
-
-
-def retrieve_metadata_legacy(
-    deposition_id: str,
-    zenodo_interactor: ZenodoInteractor | None = None,
-) -> dict[str, dict[str, str]]:
-    r"""
-    Retrieve metadata associated with a given deposition ID, using the legacy API
-
-    This is the pre-InvenioRDM implementation,
-    so the metadata comes back in the legacy schema.
-    It is kept only so that the command-line interface keeps working
-    while the rewrite lands: TO BE DELETED when the CLI is trimmed (Part 8).
-    Use [`retrieve_metadata`][openscm_zenodo.zenodo.retrieve_metadata] instead.
-
-    Parameters
-    ----------
-    deposition_id
-        The ID of the deposition
-
-    zenodo_interactor
-        Object to use to interact with Zenodo.
-
-        If not supplied, we use a default interactor with no authentication.
-
-    Returns
-    -------
-    :
-        Metadata, in a form which could be used directly with the Zenodo API.
-
-    Examples
-    --------
-    >>> import json
-    >>> res_raw = retrieve_metadata_legacy("4589756")  # doctest: +ZENODO_API
-    >>> res_json = json.dumps(res_raw, indent=2, sort_keys=True)
-    >>> print(res_json)
-    {
-      "metadata": {
-        "access_right": "open",
-        "creators": [
-          {
-            "affiliation": "Australian-German Climate & Energy College, University of Melbourne",
-            "name": "Zebedee Nicholls",
-            "orcid": "0000-0002-4767-2723"
-          },
-          {
-            "affiliation": "Australian-German Climate & Energy College, University of Melbourne",
-            "name": "Jared Lewis",
-            "orcid": "0000-0002-8155-8924"
-          }
-        ],
-        "description": "Reduced Complexity Model Intercomparison Project (RCMIP) protocol. The protocol defines all of RCMIP's experiments as well as RCMIP's submission template. If used, please also cite Nicholls et al., GMD 2020 (https://doi.org/10.5194/gmd-13-5175-2020).",
-        "doi": "10.5281/zenodo.4589756",
-        "keywords": [
-          "rcmip",
-          "protocol",
-          "climate",
-          "reduced-complexity",
-          "model",
-          "models",
-          "intercomparison",
-          "comparison"
-        ],
-        "language": "eng",
-        "license": {
-          "id": "cc-by-sa-4.0"
-        },
-        "publication_date": "2021-03-09",
-        "relations": {
-          "version": [
-            {
-              "index": 1,
-              "is_last": true,
-              "parent": {
-                "pid_type": "recid",
-                "pid_value": "4589726"
-              }
-            }
-          ]
-        },
-        "resource_type": {
-          "title": "Dataset",
-          "type": "dataset"
-        },
-        "title": "Reduced Complexity Model Intercomparison Project (RCMIP) protocol",
-        "version": "v5.1.0"
-      }
-    }
-    """  # noqa: E501
-    if zenodo_interactor is None:
-        zenodo_interactor = ZenodoInteractor()
-
-    return zenodo_interactor.get_metadata(deposition_id)
-
-
-def retrieve_bibtex_entry(
-    deposition_id: str,
-    zenodo_interactor: ZenodoInteractor | None = None,
-) -> str:
-    r"""
-    Retrieve the bibtext entry associated with a given deposition ID
-
-    This is the pre-InvenioRDM implementation.
-    It is kept only so that the command-line interface keeps working
-    while the rewrite lands: TO BE DELETED when the CLI is trimmed (Part 8).
-    Use [`retrieve_citation`][openscm_zenodo.zenodo.retrieve_citation] instead,
-    which reaches every format Zenodo exports.
-
-    Parameters
-    ----------
-    deposition_id
-        The ID of the deposition
-
-    zenodo_interactor
-        Object to use to interact with Zenodo.
-
-        If not supplied, we use a default interactor with no authentication.
-
-    Returns
-    -------
-    :
-        Bibtex entry for deposition ID `deposition_id`.
-
-    Examples
-    --------
-    >>> res = retrieve_bibtex_entry("4589756")  # doctest: +ZENODO_API
-    >>> # There are trailing newlines in the Zenodo response.
-    >>> # We strip them here
-    >>> res_disp = "\n".join([v.rstrip() for v in res.splitlines()])
-    >>> print(res_disp)
-    @dataset{zebedee_nicholls_2021_4589756,
-      author       = {Zebedee Nicholls and
-                      Jared Lewis},
-      title        = {Reduced Complexity Model Intercomparison Project
-                       (RCMIP) protocol
-                      },
-      month        = mar,
-      year         = 2021,
-      publisher    = {Zenodo},
-      version      = {v5.1.0},
-      doi          = {10.5281/zenodo.4589756},
-      url          = {https://doi.org/10.5281/zenodo.4589756},
-    }
-    """
-    if zenodo_interactor is None:
-        zenodo_interactor = ZenodoInteractor()
-
-    return zenodo_interactor.get_bibtex_entry(deposition_id)
 
 
 def download_files(  # noqa: PLR0913
@@ -5829,121 +4971,3 @@ def create_or_get_new_version(  # noqa: PLR0913
         client.publish(new_version_id)
 
     return new_version_id
-
-
-def create_new_version_legacy(  # noqa: PLR0913
-    any_deposition_id: str,
-    zenodo_interactor: ZenodoInteractor,
-    metadata: MetadataType | None = None,
-    publish: bool = False,
-    files_to_upload: list[Path] | None = None,
-    n_threads: int = 4,
-) -> str:
-    """
-    Create a new version of a given record, using the legacy API
-
-    This is the pre-InvenioRDM implementation.
-    It is kept only so that the command-line interface keeps working
-    while the rewrite lands: TO BE DELETED when the CLI is trimmed (Part 8).
-    Use
-    [`create_or_get_new_version`][openscm_zenodo.zenodo.create_or_get_new_version]
-    instead.
-
-    This starts from the ID of any deposition in the record/series.
-
-    Parameters
-    ----------
-    any_deposition_id
-        Any deposition ID which belongs to the series/record of interest.
-
-        This can be obtained from the URL of any deposit in the series.
-        For example, if the Zenodo URL is
-        https://sandbox.zenodo.org/records/101709,
-        then you can pass in "101709" as `any_deposition_id`.
-
-    zenodo_interactor
-        Object to use to interact with Zenodo
-
-    metadata
-        Path to the file that contains the metadata to apply to the new version.
-
-        If not supplied, the metadata from the previous version will not be updated.
-
-        For futher information about the required form,
-        see the docstring of
-        [`update_metadata`][openscm_zenodo.zenodo.ZenodoInteractor.update_metadata].
-        To get an example, see the docstring of
-        [`retrieve_metadata`][openscm_zenodo.zenodo.retrieve_metadata].
-
-    publish
-        Should we publish the newly created version once we have uploaded the files?
-
-    files_to_upload
-        If supplied, the files to upload to the newly created version.
-
-    n_threads
-        If `files_to_upload` is supplied,
-        the number of threads to use for parallel uploads.
-
-    Returns
-    -------
-    :
-        Deposition ID of the new version
-    """
-    latest_deposition_id = zenodo_interactor.get_latest_deposition_id(
-        any_deposition_id=any_deposition_id,
-    )
-
-    new_deposition_id = zenodo_interactor.create_new_version_from_latest(
-        latest_deposition_id=latest_deposition_id
-    ).json()["id"]
-
-    if metadata is not None:
-        zenodo_interactor.update_metadata(
-            deposition_id=new_deposition_id,
-            metadata=metadata,
-        )
-
-    if files_to_upload is not None:
-        zenodo_interactor.upload_files(
-            deposition_id=new_deposition_id,
-            to_upload=files_to_upload,
-            n_threads=n_threads,
-        )
-
-    if publish:
-        zenodo_interactor.publish(new_deposition_id)
-
-    return str(new_deposition_id)
-
-
-def get_reserved_doi_legacy(zenodo_record_response: requests.models.Response) -> str:
-    """
-    Get the reserved DOI from a Zenodo record response, using the legacy API
-
-    This is the pre-InvenioRDM implementation,
-    so it reads the legacy schema's `metadata.prereserve_doi`.
-    It is kept only so that the command-line interface keeps working
-    while the rewrite lands: TO BE DELETED when the CLI is trimmed (Part 8).
-    A record's DOI, reserved or minted, is now
-    [`Record.doi`][openscm_zenodo.zenodo.Record.doi], and
-    [`reserve_or_get_doi`][openscm_zenodo.zenodo.ZenodoClient.reserve_or_get_doi]
-    is how to reserve one.
-
-    We think that this works
-    with basically any response related to retrieving a record from Zenodo,
-    because it basically just looks at the metadata field.
-    However, it may not support all responses.
-    You have been warned.
-
-    Parameters
-    ----------
-    zenodo_record_response
-        The Zenodo response for a record, from which to get the reserved DOI.
-
-    Returns
-    -------
-    :
-        The record's reserved DOI
-    """
-    return str(zenodo_record_response.json()["metadata"]["prereserve_doi"]["doi"])

@@ -1,29 +1,24 @@
 """
 Tests of how the command-line interface resolves tokens
 
-These do not hit Zenodo:
-the interactor is replaced so we can see the token it was handed.
+These do not hit Zenodo: the session is replaced, so what we assert on is the
+`Authorization` header the CLI would have sent. That is a step further than
+reading the token off the client — it is the thing which actually decides
+whether Zenodo lets us in.
 
-**TO BE REWRITTEN, not deleted** (plan Part 8). What these test — the
-`--token` → `ZENODO_SANDBOX_TOKEN` → `ZENODO_TOKEN` → `.env` precedence chain —
-is behaviour the trimmed CLI keeps, so the coverage has to survive. What has to
-change is the scaffolding: every test drives `remove-files`, which is removed,
-and patches `ZenodoInteractor`, which goes with it. Point them at a retained
-command and at `ZenodoClient` instead.
+The command used is `retrieve-citation`, because it is a read and needs no
+files. Which command it is does not matter: the token chain lives in
+`resolve_token`, which every command reaches the same way, through
+`ZenodoClient`.
 """
 
 from __future__ import annotations
 
-import importlib
-
 import pytest
 from typer.testing import CliRunner
 
+from openscm_zenodo import zenodo as zenodo_module
 from openscm_zenodo.cli.app import app
-
-# `openscm_zenodo.cli.app` is both a module and the `Typer` instance
-# exported by `openscm_zenodo.cli`, so we have to be explicit about which we want.
-cli_app_module = importlib.import_module("openscm_zenodo.cli.app")
 
 try:
     runner = CliRunner(mix_stderr=False)
@@ -33,115 +28,129 @@ except TypeError:
 
 
 @pytest.fixture
-def captured_token(monkeypatch):
-    """Capture the token handed to the interactor, without hitting Zenodo"""
-    captured = {}
+def sent(monkeypatch, make_recording_session, make_response):
+    """
+    Capture what the CLI would send to Zenodo, without sending it
 
-    class FakeInteractor:
-        def __init__(self, token, zenodo_domain):
-            captured["token"] = token
-            captured["zenodo_domain"] = zenodo_domain
+    The real client is built, so the token chain runs for real; only the
+    transport is replaced.
+    """
+    session = make_recording_session([make_response(text="@dataset{fake}")])
+    monkeypatch.setattr(zenodo_module, "build_session", lambda: session)
 
-        def remove_all_files(self, deposition_id):
-            captured["deposition_id"] = deposition_id
+    return session
 
-    monkeypatch.setattr(cli_app_module, "ZenodoInteractor", FakeInteractor)
 
-    return captured
+def sent_token(session):
+    """Get the token from the one request the session was given"""
+    (call,) = session.calls
+    authorization = call["headers"].get("Authorization")
+    if authorization is None:
+        return None
+
+    scheme, _, token = authorization.partition(" ")
+    assert scheme == "Bearer", authorization
+
+    return token
 
 
 @pytest.fixture
-def env_file(tmp_path, monkeypatch):
+def env_file(tmp_path, no_token_in_env):
     """A `.env` file holding a token, with no ambient token in the environment"""
     res = tmp_path / ".env"
     res.write_text("ZENODO_TOKEN=from-dot-env\n")
 
-    monkeypatch.delenv("ZENODO_TOKEN", raising=False)
-    monkeypatch.delenv("ZENODO_SANDBOX_TOKEN", raising=False)
-
     return res
 
 
-def test_token_option(captured_token, env_file):
+def test_token_option(sent, env_file):
     res = runner.invoke(
         app,
-        ["remove-files", "1234", "--all", "--token", "from-the-option"],
+        ["retrieve-citation", "1234", "--token", "from-the-option"],
     )
 
     assert res.exit_code == 0, res.output
-    assert captured_token["token"] == "from-the-option"  # noqa: S105
+    assert sent_token(sent) == "from-the-option"
 
 
-def test_token_from_the_environment(captured_token, env_file, monkeypatch):
+def test_token_from_the_environment(sent, env_file, monkeypatch):
     monkeypatch.setenv("ZENODO_TOKEN", "from-the-environment")
 
-    res = runner.invoke(app, ["remove-files", "1234", "--all"])
+    res = runner.invoke(app, ["retrieve-citation", "1234"])
 
     assert res.exit_code == 0, res.output
-    assert captured_token["token"] == "from-the-environment"  # noqa: S105
+    assert sent_token(sent) == "from-the-environment"
 
 
-def test_token_from_the_sandbox_environment_variable(
-    captured_token, env_file, monkeypatch
-):
+def test_token_from_the_sandbox_environment_variable(sent, env_file, monkeypatch):
     monkeypatch.setenv("ZENODO_TOKEN", "from-the-environment")
     monkeypatch.setenv("ZENODO_SANDBOX_TOKEN", "from-the-sandbox-environment")
 
     res = runner.invoke(
         app,
         [
-            "remove-files",
+            "retrieve-citation",
             "1234",
-            "--all",
             "--zenodo-domain",
             "https://sandbox.zenodo.org",
         ],
     )
 
     assert res.exit_code == 0, res.output
-    assert captured_token["token"] == "from-the-sandbox-environment"  # noqa: S105
+    assert sent_token(sent) == "from-the-sandbox-environment"
+    # The sandbox token is only the right answer because we asked for the
+    # sandbox, so check we really did
+    (call,) = sent.calls
+    assert call["url"].startswith("https://sandbox.zenodo.org")
 
 
-def test_token_from_an_env_file(captured_token, env_file):
+def test_token_from_an_env_file(sent, env_file):
     res = runner.invoke(
         app,
-        ["--env-file", str(env_file), "remove-files", "1234", "--all"],
+        ["--env-file", str(env_file), "retrieve-citation", "1234"],
     )
 
     assert res.exit_code == 0, res.output
-    assert captured_token["token"] == "from-dot-env"  # noqa: S105
+    assert sent_token(sent) == "from-dot-env"
 
 
-def test_env_file_does_not_override_the_environment(
-    captured_token, env_file, monkeypatch
-):
+def test_env_file_does_not_override_the_environment(sent, env_file, monkeypatch):
     monkeypatch.setenv("ZENODO_TOKEN", "from-the-environment")
 
     res = runner.invoke(
         app,
-        ["--env-file", str(env_file), "remove-files", "1234", "--all"],
+        ["--env-file", str(env_file), "retrieve-citation", "1234"],
     )
 
     assert res.exit_code == 0, res.output
-    assert captured_token["token"] == "from-the-environment"  # noqa: S105
+    assert sent_token(sent) == "from-the-environment"
 
 
-def test_env_file_discovered_from_the_working_directory(
-    captured_token, env_file, monkeypatch
-):
+def test_env_file_discovered_from_the_working_directory(sent, env_file, monkeypatch):
     monkeypatch.chdir(env_file.parent)
 
-    res = runner.invoke(app, ["remove-files", "1234", "--all"])
+    res = runner.invoke(app, ["retrieve-citation", "1234"])
 
     assert res.exit_code == 0, res.output
-    assert captured_token["token"] == "from-dot-env"  # noqa: S105
+    assert sent_token(sent) == "from-dot-env"
 
 
-def test_missing_env_file(captured_token, tmp_path):
+def test_missing_env_file(sent, tmp_path):
     res = runner.invoke(
         app,
-        ["--env-file", str(tmp_path / "nope.env"), "remove-files", "1234", "--all"],
+        ["--env-file", str(tmp_path / "nope.env"), "retrieve-citation", "1234"],
     )
 
     assert res.exit_code != 0
-    assert "token" not in captured_token
+    assert not sent.calls
+
+
+def test_no_token_at_all_still_reads(sent, no_token_in_env, tmp_path, monkeypatch):
+    """A public record is readable with no token, so nothing is sent"""
+    # Somewhere with no `.env` file to find
+    monkeypatch.chdir(tmp_path)
+
+    res = runner.invoke(app, ["retrieve-citation", "1234"])
+
+    assert res.exit_code == 0, res.output
+    assert sent_token(sent) is None

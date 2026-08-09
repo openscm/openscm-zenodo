@@ -29,7 +29,7 @@ from the examples given in that link.
 
 ### 🎉 Improvements
 
-- Mask the token in the representation of [`ZenodoInteractor`][openscm_zenodo.ZenodoInteractor]. ([#17](https://github.com/openscm/OpenSCM-zenodo/pull/17))
+- Mask the token in the representation of `ZenodoInteractor`. ([#17](https://github.com/openscm/OpenSCM-zenodo/pull/17))
 
 ### 📚 Improved Documentation
 
@@ -44,11 +44,11 @@ from the examples given in that link.
 
 ### 🆕 Features
 
-- Added [`ZenodoInteractor.get_draft_deposition_id`][openscm_zenodo.ZenodoInteractor.get_draft_deposition_id].
+- Added `ZenodoInteractor.get_draft_deposition_id`.
   This makes it possible to get the draft deposition ID, even if you're already created the draft.
   It is the recommended way of getting a draft deposition ID,
-  superseding [`ZenodoInteractor.create_new_version_from_latest`][openscm_zenodo.ZenodoInteractor.create_new_version_from_latest].
-  ([`ZenodoInteractor.create_new_version_from_latest`][openscm_zenodo.ZenodoInteractor.create_new_version_from_latest]
+  superseding `ZenodoInteractor.create_new_version_from_latest`.
+  (`ZenodoInteractor.create_new_version_from_latest`
   is still available, it just fails if you have already created a draft.) ([#15](https://github.com/openscm/OpenSCM-zenodo/pull/15))
 
 
@@ -71,8 +71,8 @@ from the examples given in that link.
 
 - Added bibtex metadata retrieval.
   Specifically: `openscm-zenodo retrieve-bibtex`,
-  [`retrieve_bibtex_entry`][openscm_zenodo.zenodo.retrieve_bibtex_entry]
-  and [`get_bibtex_entry`][openscm_zenodo.zenodo.ZenodoInteractor.get_bibtex_entry]. ([#12](https://github.com/openscm/openscm-zenodo/pull/12))
+  `retrieve_bibtex_entry`
+  and `ZenodoInteractor.get_bibtex_entry`. ([#12](https://github.com/openscm/openscm-zenodo/pull/12))
 
 ### 🎉 Improvements
 
@@ -93,7 +93,7 @@ from the examples given in that link.
 ### 🆕 Features
 
 - Added the `--reserve-doi` flag to the `openscm-zenodo update-metadata` command.
-  Also added [`get_reserved_doi`][openscm_zenodo.zenodo.get_reserved_doi_legacy]. ([#10](https://github.com/openscm/openscm-zenodo/pull/10))
+  Also added `get_reserved_doi`. ([#10](https://github.com/openscm/openscm-zenodo/pull/10))
 
 ### 🔧 Trivial/Internal Changes
 

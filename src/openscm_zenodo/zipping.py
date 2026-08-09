@@ -292,7 +292,7 @@ def zip_files(  # noqa: PLR0913
     else:
         ordered = sorted(names.items(), key=lambda item: str(item[1]))
 
-    logger.info(f"Zipping {len(ordered)} file(s) into {dest}")
+    logger.debug(f"Zipping {len(ordered)} file(s) into {dest}")
 
     dest.parent.mkdir(parents=True, exist_ok=True)
 
@@ -313,6 +313,6 @@ def zip_files(  # noqa: PLR0913
 
             bar.update(1)
 
-    logger.info(f"Wrote {dest}")
+    logger.info(f"Zipped {len(ordered)} file(s) into {dest}")
 
     return dest

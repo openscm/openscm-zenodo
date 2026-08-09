@@ -1,0 +1,1 @@
+Think through best docs to write (turns out Zenodo is kind of complicated and the API shouldn't be mirrored exactly, so we have to explain our SDK and what Zenodo supports and doesn't somewhere, maybe further background, then leave how-to and tutorials for explaining how to do stuff)
