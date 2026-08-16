@@ -915,7 +915,8 @@ Naming symmetry with Part 4: `mirror_files` is what `FilesMode.mirror` calls, an
 
 **Done.** `new_version` (renamed `create_or_get_new_version` in Part 6, since it
 returns the version already in progress rather than always creating one),
-`import_files`, `publish`, `update_metadata`,
+`import_files` (renamed `inherit_files` with step 2b, see below), `publish`,
+`update_metadata`,
 `get_latest_version_id`, `FilesMode` and the `create_new_version` helper, with
 unit tests and live sandbox tests
 (`tests/integration/test_versions_integration.py`). Deltas and findings, all
@@ -933,6 +934,19 @@ verified against the sandbox:
   that Part 4 promises. So `import_files` checks first and returns `False`
   instead of failing when the draft already has files. The underlying Zenodo
   behaviour has its own test, so we notice if it changes.
+- **Renamed `inherit_files`, and it returns the draft's files rather than a
+  bool** (done with step 2b). The boolean was a status flag no call site read —
+  `create_or_get_new_version` and the `create_new_version` helper both discarded
+  it — on a method which also acted, which is the query/command mix worth
+  avoiding. It now returns `dict[str, FileEntry]`, the draft's files afterwards,
+  the same shape `upload_files` and `mirror_files` return, and the skip case
+  returns the files which were already there. That costs nothing either way:
+  the skip path was already listing them, and Zenodo answers
+  `POST .../draft/actions/files-import` with the draft's file listing (verified
+  against the sandbox, and `test_inherit_files` there depends on it). The name
+  matches `FilesMode.inherit`, which was already chosen over `import` because
+  `FilesMode.import` is a syntax error, so one concept now has one word;
+  `create_or_get_new_version(..., import_files=)` became `inherit_files=`.
 - **`FilesMode.mirror` refuses to run without an explicit `files`.** Mirroring
   deletes whatever is not listed, so it may not happen by omission; pass
   `files=[]` to mean "no files".
@@ -2096,7 +2110,7 @@ implemented:
 | `POST .../draft/pids/doi` | `reserve_or_get_doi` | sandbox | ✅ |
 | `POST .../draft/actions/publish` | `publish` | sandbox | ✅ |
 | `POST /api/records/{id}/versions` | `new_version` | sandbox | ✅ |
-| `POST .../draft/actions/files-import` | `import_files` | sandbox | ✅ |
+| `POST .../draft/actions/files-import` | `inherit_files` | sandbox | ✅ |
 
 ### 12.3 Scenario tests
 
@@ -2152,7 +2166,57 @@ On top of per-endpoint coverage:
 
 ---
 
-## Part 13 — File writes never target a published record
+## Part 13 — File writes never target a published record — ✅ IMPLEMENTED
+
+**Done** (sequencing step 2b, 13.5's steps 1–4). `ZenodoClient._assert_writable`
+on the eight public file-write methods, `_writing_files` translating the late
+failures, and the two read-side fallbacks, with unit tests
+(`tests/test_file_write_guard.py`) and a live sandbox test
+(`test_file_writes_are_refused_once_a_record_is_published`). Deltas from the text
+below, all deliberate:
+
+- **Step 1 was already done.** `RecordNotWritableError` landed with Part 6, for
+  metadata, and its `what="files"` branch already said what 13.5 asked for.
+- **The guard is at the public entry points, with unguarded private twins.**
+  `_upload_file`, `_delete_file` and `_delete_files` do the work;
+  `upload_file`/`delete_file`/`delete_files` are the guard plus a call to them,
+  and `upload_files`, `mirror_files`, `upload_files_as_zip` and
+  `delete_all_files` guard once and then use the private ones. So a batch asks
+  the question once, not once per file, which is what 13.5 warned about.
+- **The guard also raises `MissingTokenError` when there is no token.** Without
+  this the guard was actively worse than no guard: a draft is invisible without
+  a token, so `is_draft` would report a record which is plainly there as
+  missing, and the `MissingTokenError` the write itself used to raise would
+  never be reached.
+- **The late-failure translation asks again rather than assuming.** A `404` from
+  a file write also covers "no such file", so `_writing_files` re-checks
+  `is_draft` and only claims the record is published when it is; a `404` on a
+  live draft stays the `ZenodoHTTPError` it was. That costs one or two requests,
+  on an error path only.
+- **A failed upload is not cleaned up after `RecordNotWritableError`.** There is
+  nothing left behind — Zenodo refused every write — and the clean-up delete
+  would be refused too, so it would only add a misleading warning.
+- **`is_draft` only re-checks when it had a token.** Without one it never asked
+  about the draft, so there was no window between two questions to lose the
+  record in, and a second look would just repeat the first.
+- **Race window 3 (re-resolving a download's listing) is not done**, and is the
+  one piece of 13.5 left open. It is optional in 13.4 for a reason:
+  `_download_entry` holds a `FileEntry`, not the record, so closing it means
+  threading the record ID and a re-resolve through `download_file`,
+  `download_files` and `_download_entry` to improve the message on a failure
+  which already fails fast rather than retrying.
+- **The unit tests derive the guarded methods from the source AST**, in the style
+  of `test_log_messages.py`: a new public method named like a file write fails
+  the suite unless it guards, and guarding it fails the suite unless it is also
+  called against a published record like every other one.
+- **Existing tests gained two conftest fixtures**, `draft_check_responses` and
+  `write_calls`, because every file write now sends a request the scripted
+  sessions did not expect. They put the guard's answers in front of a test's own
+  responses, and filter its calls back out of the assertions.
+
+The original text is kept below.
+
+---
 
 Part 5 settled one principle — **`draft` is never a parameter of the public API**
 — and the audit below confirms it held everywhere. This part adds the second and
@@ -2173,7 +2237,7 @@ records what it takes to guarantee it *ourselves*.
 | Surface | How draft-ness is decided | Status |
 |---|---|---|
 | `download_file`, `download_files`, `list_files` | `is_draft(record_id)`, then the matching listing endpoint; content follows the listing's `content_url`, so the two endpoints are never told apart twice | ✅ |
-| **file writes** — `upload_file(s)`, `mirror_files`, `delete_file(s)`, `delete_all_files`, `import_files` | hard-coded `/draft` in the URL | ✅ in effect, see 13.2 |
+| **file writes** — `upload_file(s)`, `mirror_files`, `delete_file(s)`, `delete_all_files`, `inherit_files` | `_assert_writable(record_id)` at the public entry point, then hard-coded `/draft` in the URL | ✅ ours now, see 13.2 |
 | **metadata / lifecycle** — `update_metadata`, `publish` | hard-coded `/draft` in the URL; a `404` from `update_metadata` becomes `RecordNotWritableError` | ✅ settled, see 13.3 |
 | `new_version` | `POST /api/records/{id}/versions` — published by design | ✅ the documented exception |
 | `is_draft(record_id)` | the question itself: published first, then draft | ✅ — `files_based` is gone, `has_draft` is the other question (13.3) |
@@ -2368,7 +2432,11 @@ It is the better shape, but it moves the resolution out of `is_draft` and is a
 bigger change than the targeted fallbacks above; revisit when Part 6 forces
 `is_draft` open anyway.
 
-### 13.5 Implementation sequence
+### 13.5 Implementation sequence — ✅ DONE, except the optional half of step 4
+
+Steps 1, 2 and 3 are done, and step 4 is done apart from re-resolving a
+download's listing, which 13.4 marks optional and which is written up at the top
+of this part. The original text follows.
 
 Steps 1–3 are the file-write invariant. **None of it is urgent** — 13.2 establishes
 that Zenodo already refuses every file write against a published record — so this
@@ -2632,7 +2700,6 @@ not, and what to do next.
 
 | # | Work | Why it is next |
 |---|---|---|
-| **2b** | **File-write guard (13.5, steps 1–4)** | `_assert_writable` on the file-write methods, plus the race-window fixes. **Not urgent**: 13.2 establishes that Zenodo already refuses every file write against a published record, so this is hardening and error quality. |
 | **9** | **Live-API suite sweep (Part 12)** | The 12.2 endpoint matrix is already fully ticked, so what is left is the scenario tests in 12.3 and wiring up the scheduled CI run — the standing guard against Zenodo changing under us. Do it last; the CLI is now settled, so the scenarios can be written against the shipped surface. |
 
 ### Done
@@ -2648,6 +2715,7 @@ not, and what to do next.
 | 6 | Mirror + versions — `mirror_files`, `create_or_get_new_version`, `FilesMode` (Parts 3–4) | tops of Parts 3 and 4 |
 | 7 | Download — `download_file`, `download_files` (Part 5) | top of Part 5 |
 | 8 | CLI trimmed to three commands, legacy source and tests deleted, packaging/docs/migration guide (Parts 8–9) | tops of Parts 8 and 9 |
+| 2b | File-write guard and the read-side race fallbacks (Part 13, 13.5 steps 1–4) | top of Part 13 |
 
 They were taken out of order: uploads, mirror, versions and download (Parts 2–5)
 landed before the read paths and before the metadata schema, so the transport was

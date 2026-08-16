@@ -235,6 +235,9 @@ sorted(path.name for path in from_draft.iterdir())
 # A published record cannot be deleted, and its files can no longer be changed —
 # changing files means making a new version, with
 # [`create_or_get_new_version`][openscm_zenodo.ZenodoClient.create_or_get_new_version].
+# Uploading to or deleting from a published record raises
+# [`RecordNotWritableError`][openscm_zenodo.exceptions.RecordNotWritableError]
+# rather than sending anything.
 
 # %%
 published_id = client.publish(record.record_id)

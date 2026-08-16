@@ -287,7 +287,7 @@ def test_reserve_or_get_doi_when_one_is_already_reserved(
     Zenodo refuses a second reservation with
     `400 A PID already exists for type doi`, so asking the record first is what
     makes a release script which failed part way through safe to re-run, in the
-    same way `import_files` and `create_or_get_new_version` are.
+    same way `inherit_files` and `create_or_get_new_version` are.
     """
     client, session = client_and_session(
         [

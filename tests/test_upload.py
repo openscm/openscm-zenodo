@@ -60,11 +60,28 @@ def make_commit_response(make_response, md5, *, filename="data.nc"):
 
 
 @pytest.fixture
-def upload_client(no_token_in_env, make_recording_session, make_response, to_upload):
+def client_and_session(no_token_in_env, make_recording_session, draft_check_responses):
+    """
+    A client whose session answers the writable check, then whatever is scripted
+
+    Every upload and delete asks whether the record is still a draft before it
+    writes anything, so those answers go in front of the test's own responses.
+    """
+
+    def factory(responses=None):
+        session = make_recording_session([*draft_check_responses(), *(responses or [])])
+
+        return ZenodoClient(token="a-token", session=session), session  # noqa: S106
+
+    return factory
+
+
+@pytest.fixture
+def upload_client(client_and_session, make_response, to_upload):
     """A client whose session records requests and answers a successful upload"""
     _, md5 = to_upload
 
-    session = make_recording_session(
+    client, session = client_and_session(
         [
             # Initialise
             make_response(json_body={"entries": [{"key": "data.nc"}]}),
@@ -75,16 +92,17 @@ def upload_client(no_token_in_env, make_recording_session, make_response, to_upl
         ]
     )
 
-    return ZenodoClient(token="a-token", session=session), session  # noqa: S106
+    return client, session
 
 
-def test_upload_file_three_step_flow(upload_client, to_upload):
+def test_upload_file_three_step_flow(upload_client, to_upload, write_calls):
     client, session = upload_client
     path, md5 = to_upload
 
     entry = client.upload_file(RECORD_ID, path)
 
-    assert [(call["method"], call["url"]) for call in session.calls] == [
+    calls = write_calls(session)
+    assert [(call["method"], call["url"]) for call in calls] == [
         ("POST", f"https://zenodo.org/api/records/{RECORD_ID}/draft/files"),
         (
             "PUT",
@@ -97,14 +115,14 @@ def test_upload_file_three_step_flow(upload_client, to_upload):
     ]
 
     # The key is sent as a list, which is what InvenioRDM expects
-    assert session.calls[0]["json"] == [{"key": "data.nc"}]
+    assert calls[0]["json"] == [{"key": "data.nc"}]
     # The content goes up as a stream, not as a body we have read into memory
-    assert hasattr(session.calls[1]["data"], "read")
-    assert session.calls[1]["headers"]["Content-Type"] == "application/octet-stream"
+    assert hasattr(calls[1]["data"], "read")
+    assert calls[1]["headers"]["Content-Type"] == "application/octet-stream"
     assert entry.checksum == f"md5:{md5}"
 
 
-def test_upload_file_uses_the_upload_timeout(upload_client, to_upload):
+def test_upload_file_uses_the_upload_timeout(upload_client, to_upload, write_calls):
     """
     Only the content request gets the long timeout
     """
@@ -113,7 +131,7 @@ def test_upload_file_uses_the_upload_timeout(upload_client, to_upload):
 
     client.upload_file(RECORD_ID, path)
 
-    assert [call["timeout"] for call in session.calls] == [
+    assert [call["timeout"] for call in write_calls(session)] == [
         client.timeout,
         client.timeout_upload,
         client.timeout,
@@ -121,7 +139,7 @@ def test_upload_file_uses_the_upload_timeout(upload_client, to_upload):
 
 
 def test_upload_file_strips_the_local_path(
-    no_token_in_env, make_recording_session, make_response, tmp_path
+    client_and_session, make_response, tmp_path, write_calls
 ):
     """
     Zenodo has no directories, so the file lands under its basename, and says so
@@ -132,23 +150,26 @@ def test_upload_file_strips_the_local_path(
     path.write_bytes(b"x")
 
     md5 = hashlib.md5(b"x").hexdigest()  # noqa: S324 # Zenodo uses md5
-    session = make_recording_session(
+    client, session = client_and_session(
         [
             make_response(),
             make_response(),
             make_commit_response(make_response, md5),
         ]
     )
-    client = ZenodoClient(token="a-token", session=session)  # noqa: S106
 
     with pytest.warns(OpenSCMZenodoWarning, match="will be uploaded as data.nc"):
         client.upload_file(RECORD_ID, path)
 
-    assert session.calls[0]["json"] == [{"key": "data.nc"}]
+    assert write_calls(session)[0]["json"] == [{"key": "data.nc"}]
 
 
 def test_upload_file_quotes_the_filename(
-    no_token_in_env, make_recording_session, make_response, tmp_path, monkeypatch
+    client_and_session,
+    make_response,
+    tmp_path,
+    monkeypatch,
+    write_calls,
 ):
     """
     A name which is not URL safe still ends up hitting the right endpoint
@@ -159,21 +180,21 @@ def test_upload_file_quotes_the_filename(
     path.write_bytes(b"x")
 
     md5 = hashlib.md5(b"x").hexdigest()  # noqa: S324 # Zenodo uses md5
-    session = make_recording_session(
+    client, session = client_and_session(
         [
             make_response(),
             make_response(),
             make_commit_response(make_response, md5, filename=filename),
         ]
     )
-    client = ZenodoClient(token="a-token", session=session)  # noqa: S106
 
     client.upload_file(RECORD_ID, path)
 
+    calls = write_calls(session)
     quoted = urllib.parse.quote(filename, safe="")
-    assert session.calls[1]["url"].endswith(f"/draft/files/{quoted}/content")
+    assert calls[1]["url"].endswith(f"/draft/files/{quoted}/content")
     # The key itself is not quoted, only the URL
-    assert session.calls[0]["json"] == [{"key": filename}]
+    assert calls[0]["json"] == [{"key": filename}]
 
 
 def test_upload_file_requires_a_token(
@@ -190,7 +211,10 @@ def test_upload_file_requires_a_token(
 
 
 def test_upload_file_replaces_a_file_which_is_already_there(
-    no_token_in_env, make_recording_session, make_response, to_upload
+    client_and_session,
+    make_response,
+    to_upload,
+    write_calls,
 ):
     """
     An existing file, or one left behind by a failed upload, is removed first
@@ -200,7 +224,7 @@ def test_upload_file_replaces_a_file_which_is_already_there(
     """
     path, md5 = to_upload
 
-    session = make_recording_session(
+    client, session = client_and_session(
         [
             # Initialise, rejected because the key is already there
             make_response(status_code=400, json_body={"message": "already exists"}),
@@ -214,11 +238,10 @@ def test_upload_file_replaces_a_file_which_is_already_there(
             make_commit_response(make_response, md5),
         ]
     )
-    client = ZenodoClient(token="a-token", session=session)  # noqa: S106
 
     client.upload_file(RECORD_ID, path)
 
-    assert [call["method"] for call in session.calls] == [
+    assert [call["method"] for call in write_calls(session)] == [
         "POST",
         "DELETE",
         "POST",
@@ -228,29 +251,34 @@ def test_upload_file_replaces_a_file_which_is_already_there(
 
 
 def test_upload_file_does_not_swallow_other_initialise_failures(
-    no_token_in_env, make_recording_session, make_response, to_upload
+    client_and_session,
+    make_response,
+    to_upload,
 ):
     path, _ = to_upload
 
-    session = make_recording_session(
+    client, _ = client_and_session(
         [
+            # Initialise, refused for a reason which is nothing to do with the
+            # record being published
             make_response(status_code=403, json_body={"message": "Permission denied"}),
+            # Working out whether it was: the record is still a draft, so the
+            # `403` above is left to speak for itself
+            make_response(status_code=404),
+            make_response(json_body={"id": 1234, "is_draft": True}),
             # The cleanup delete
             make_response(status_code=404),
         ]
     )
-    client = ZenodoClient(token="a-token", session=session)  # noqa: S106
 
     with pytest.raises(ZenodoHTTPError, match="Permission denied"):
         client.upload_file(RECORD_ID, path, max_attempts=1)
 
 
-def test_upload_file_checksum_mismatch(
-    no_token_in_env, make_recording_session, make_response, to_upload
-):
+def test_upload_file_checksum_mismatch(client_and_session, make_response, to_upload):
     path, _ = to_upload
 
-    session = make_recording_session(
+    client, _ = client_and_session(
         [
             make_response(),
             make_response(),
@@ -259,28 +287,28 @@ def test_upload_file_checksum_mismatch(
             make_response(status_code=204),
         ]
     )
-    client = ZenodoClient(token="a-token", session=session)  # noqa: S106
 
     with pytest.raises(ChecksumMismatchError):
         client.upload_file(RECORD_ID, path, max_attempts=1)
 
 
 def test_upload_file_no_checksum_verification(
-    no_token_in_env, make_recording_session, make_response, to_upload
+    client_and_session,
+    make_response,
+    to_upload,
 ):
     """
     With verification off, a mismatching checksum is not noticed
     """
     path, _ = to_upload
 
-    session = make_recording_session(
+    client, _ = client_and_session(
         [
             make_response(),
             make_response(),
             make_commit_response(make_response, "not-the-right-checksum"),
         ]
     )
-    client = ZenodoClient(token="a-token", session=session)  # noqa: S106
 
     entry = client.upload_file(RECORD_ID, path, verify_checksum=False)
 
@@ -288,7 +316,11 @@ def test_upload_file_no_checksum_verification(
 
 
 def test_upload_file_retries_a_checksum_mismatch(
-    no_token_in_env, make_recording_session, make_response, to_upload, log_messages
+    client_and_session,
+    make_response,
+    to_upload,
+    log_messages,
+    write_calls,
 ):
     """
     A corrupted transfer is tried again, from the initialise step
@@ -298,7 +330,7 @@ def test_upload_file_retries_a_checksum_mismatch(
     """
     path, md5 = to_upload
 
-    session = make_recording_session(
+    client, session = client_and_session(
         [
             # First attempt, which comes back corrupted
             make_response(),
@@ -310,17 +342,18 @@ def test_upload_file_retries_a_checksum_mismatch(
             make_commit_response(make_response, md5),
         ]
     )
-    client = ZenodoClient(token="a-token", session=session)  # noqa: S106
 
     entry = client.upload_file(RECORD_ID, path, max_attempts=2)
 
     assert entry.checksum == f"md5:{md5}"
-    assert len(session.calls) == 6
+    assert len(write_calls(session)) == 6
     assert any("Transfer attempt 1 failed" in message for message in log_messages)
 
 
 def test_upload_file_cleans_up_after_giving_up(
-    no_token_in_env, make_recording_session, make_response, to_upload
+    client_and_session,
+    make_response,
+    to_upload,
 ):
     """
     A file which was initialised but never committed is removed
@@ -330,7 +363,7 @@ def test_upload_file_cleans_up_after_giving_up(
     """
     path, _ = to_upload
 
-    session = make_recording_session(
+    client, session = client_and_session(
         [
             make_response(),
             make_response(),
@@ -339,7 +372,6 @@ def test_upload_file_cleans_up_after_giving_up(
             make_response(status_code=204),
         ]
     )
-    client = ZenodoClient(token="a-token", session=session)  # noqa: S106
 
     with pytest.raises(ChecksumMismatchError):
         client.upload_file(RECORD_ID, path, max_attempts=1)
@@ -350,14 +382,17 @@ def test_upload_file_cleans_up_after_giving_up(
 
 
 def test_upload_file_survives_a_failed_clean_up(
-    no_token_in_env, make_recording_session, make_response, to_upload, log_messages
+    client_and_session,
+    make_response,
+    to_upload,
+    log_messages,
 ):
     """
     If we cannot clean up, we warn and raise the failure that actually matters
     """
     path, _ = to_upload
 
-    session = make_recording_session(
+    client, _ = client_and_session(
         [
             make_response(),
             make_response(),
@@ -366,7 +401,6 @@ def test_upload_file_survives_a_failed_clean_up(
             make_response(status_code=500),
         ]
     )
-    client = ZenodoClient(token="a-token", session=session)  # noqa: S106
 
     with pytest.raises(ChecksumMismatchError):
         client.upload_file(RECORD_ID, path, max_attempts=1)
@@ -395,13 +429,21 @@ def test_upload_file_returns_a_file_entry(upload_client, to_upload):
     assert "raw=" not in repr(entry)
 
 
-def test_delete_file(no_token_in_env, make_recording_session, make_response):
-    session = make_recording_session([make_response(status_code=204)])
+def test_delete_file(
+    no_token_in_env,
+    make_recording_session,
+    make_response,
+    draft_check_responses,
+    write_calls,
+):
+    session = make_recording_session(
+        [*draft_check_responses(), make_response(status_code=204)]
+    )
     client = ZenodoClient(token="a-token", session=session)  # noqa: S106
 
     client.delete_file(RECORD_ID, "data.nc")
 
-    (call,) = session.calls
+    (call,) = write_calls(session)
     assert call["method"] == "DELETE"
     assert call["url"] == (
         f"https://zenodo.org/api/records/{RECORD_ID}/draft/files/data.nc"
@@ -453,7 +495,9 @@ def test_should_retry_transfer_http_errors(make_response, status_code, exp):
 
 
 def test_upload_file_content_which_zenodo_accepts_and_then_drops(
-    no_token_in_env, make_recording_session, make_response, to_upload
+    client_and_session,
+    make_response,
+    to_upload,
 ):
     """
     A `200` which says the transfer failed is a failure, and says so where it happens
@@ -473,7 +517,7 @@ def test_upload_file_content_which_zenodo_accepts_and_then_drops(
         "errors": "File upload transfer failed.",
     }
 
-    session = make_recording_session(
+    client, session = client_and_session(
         [
             # Initialise, then the content Zenodo accepts and reports as failed
             make_response(),
@@ -482,7 +526,6 @@ def test_upload_file_content_which_zenodo_accepts_and_then_drops(
             make_response(),
         ]
     )
-    client = ZenodoClient(token="a-token", session=session)  # noqa: S106
 
     with pytest.raises(FileTransferFailedError, match="File upload transfer failed"):
         client.upload_file(RECORD_ID, path, max_attempts=1, progress=False)
@@ -492,14 +535,16 @@ def test_upload_file_content_which_zenodo_accepts_and_then_drops(
 
 
 def test_upload_file_content_failure_is_retried(
-    no_token_in_env, make_recording_session, make_response, to_upload
+    client_and_session,
+    make_response,
+    to_upload,
 ):
     """
     Zenodo's storage failures are transient, so a second attempt is worth making
     """
     path, md5 = to_upload
 
-    session = make_recording_session(
+    client, _ = client_and_session(
         [
             # First attempt, which Zenodo accepts and then drops
             make_response(),
@@ -510,7 +555,6 @@ def test_upload_file_content_failure_is_retried(
             make_commit_response(make_response, md5),
         ]
     )
-    client = ZenodoClient(token="a-token", session=session)  # noqa: S106
 
     entry = client.upload_file(RECORD_ID, path, max_attempts=2, progress=False)
 

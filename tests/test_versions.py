@@ -34,6 +34,15 @@ COMPLETE_METADATA = {
 }
 """Metadata which is complete enough for Zenodo to publish"""
 
+FILE_ENTRY = {
+    "key": "a.txt",
+    "size": 1,
+    "checksum": "md5:abc",
+    "status": "completed",
+    "links": {"content": "https://zenodo.org/a.txt"},
+}
+"""One file, as Zenodo describes it in a listing"""
+
 
 def draft_body(record_id=RECORD_ID, metadata=None):
     """
@@ -80,64 +89,74 @@ def test_create_or_get_new_version_returns_a_string(client_and_session, make_res
     assert client.create_or_get_new_version(RECORD_ID) == "5678"
 
 
-def test_create_or_get_new_version_import_files(client_and_session, make_response):
+def test_create_or_get_new_version_inherit_files(
+    client_and_session, make_response, draft_check_responses
+):
     client, session = client_and_session(
         [
             # The new version
             make_response(json_body={"id": 5678}),
-            # The listing `import_files` does first
+            # The check that the new version can still be written to
+            *draft_check_responses(),
+            # The listing `inherit_files` does first
             make_response(json_body={"entries": []}),
             # The import
-            make_response(status_code=201),
+            make_response(status_code=201, json_body={"entries": []}),
         ]
     )
 
-    client.create_or_get_new_version(RECORD_ID, import_files=True)
+    client.create_or_get_new_version(RECORD_ID, inherit_files=True)
 
     assert session.calls[-1]["url"] == (
         f"https://zenodo.org/api/records/{NEW_VERSION_ID}/draft/actions/files-import"
     )
 
 
-def test_import_files(client_and_session, make_response):
+def test_inherit_files(
+    client_and_session, make_response, draft_check_responses, write_calls
+):
+    """
+    The files come back from the import itself, with no listing afterwards
+
+    Zenodo answers `actions/files-import` with the draft's file listing, so
+    saying what the draft now holds costs nothing.
+    """
     client, session = client_and_session(
-        [make_response(json_body={"entries": []}), make_response(status_code=201)]
+        [
+            *draft_check_responses(),
+            make_response(json_body={"entries": []}),
+            make_response(status_code=201, json_body={"entries": [FILE_ENTRY]}),
+        ]
     )
 
-    assert client.import_files(RECORD_ID) is True
-    assert [call["method"] for call in session.calls] == ["GET", "POST"]
+    inherited = client.inherit_files(RECORD_ID)
+
+    assert list(inherited) == ["a.txt"]
+    assert inherited["a.txt"].md5 == "abc"
+    assert [call["method"] for call in write_calls(session)] == ["GET", "POST"]
 
 
-def test_import_files_skips_a_draft_which_already_has_files(
-    client_and_session, make_response
+def test_inherit_files_leaves_a_draft_which_already_has_files_alone(
+    client_and_session, make_response, draft_check_responses, write_calls
 ):
     """
     Zenodo only imports into an empty draft, so a re-run has to skip
 
     Without this, re-running a release which failed part way through
     dies on `400 Please remove all files first.`
+    The files the draft already had are what it holds, so they are what
+    comes back.
     """
     client, session = client_and_session(
         [
-            make_response(
-                json_body={
-                    "entries": [
-                        {
-                            "key": "a.txt",
-                            "size": 1,
-                            "checksum": "md5:abc",
-                            "status": "completed",
-                            "links": {"content": "https://zenodo.org/a.txt"},
-                        }
-                    ]
-                }
-            )
+            *draft_check_responses(),
+            make_response(json_body={"entries": [FILE_ENTRY]}),
         ]
     )
 
-    assert client.import_files(RECORD_ID) is False
+    assert list(client.inherit_files(RECORD_ID)) == ["a.txt"]
     # Only the listing, no import
-    assert [call["method"] for call in session.calls] == ["GET"]
+    assert [call["method"] for call in write_calls(session)] == ["GET"]
 
 
 def test_update_metadata(client_and_session, make_response):
@@ -303,15 +322,15 @@ class RecordingClient:
     def __init__(self):
         self.calls = []
 
-    def create_or_get_new_version(self, record_id, *, import_files=False):
+    def create_or_get_new_version(self, record_id, *, inherit_files=False):
         self.calls.append(("create_or_get_new_version", record_id))
 
         return NEW_VERSION_ID
 
-    def import_files(self, record_id):
-        self.calls.append(("import_files", record_id))
+    def inherit_files(self, record_id):
+        self.calls.append(("inherit_files", record_id))
 
-        return True
+        return {}
 
     def update_metadata(self, record_id, metadata):
         self.calls.append(("update_metadata", metadata))
@@ -370,7 +389,7 @@ def test_create_new_version_inherit(recording_client, paths):
 
     assert recording_client.calls == [
         ("create_or_get_new_version", RECORD_ID),
-        ("import_files", NEW_VERSION_ID),
+        ("inherit_files", NEW_VERSION_ID),
         ("upload_files", ["a.txt", "b.txt"]),
     ]
 
@@ -382,7 +401,7 @@ def test_create_new_version_mirror(recording_client, paths):
 
     assert recording_client.calls == [
         ("create_or_get_new_version", RECORD_ID),
-        ("import_files", NEW_VERSION_ID),
+        ("inherit_files", NEW_VERSION_ID),
         ("mirror_files", ["a.txt", "b.txt"]),
     ]
 
@@ -409,7 +428,7 @@ def test_create_new_version_mirror_empty_is_allowed(recording_client):
 
     assert recording_client.calls == [
         ("create_or_get_new_version", RECORD_ID),
-        ("import_files", NEW_VERSION_ID),
+        ("inherit_files", NEW_VERSION_ID),
         ("mirror_files", []),
     ]
 

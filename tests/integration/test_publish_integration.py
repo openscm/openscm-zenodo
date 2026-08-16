@@ -72,6 +72,48 @@ def test_create_new_version_publish(
     assert sandbox_client.get_latest_version_id(first_id) == new_version_id
 
 
+def test_file_writes_are_refused_once_a_record_is_published(
+    sandbox_client, draft_record_id, build_metadata, in_a_working_directory
+):
+    """
+    Both shapes of published record refuse a file write, and we say why
+
+    Zenodo refuses these itself, with a `404` when the record has no draft and
+    a `403 Bucket is locked for modifications.` once it has one. This is the
+    live check that we refuse them first, and with an error which names the way
+    forward. It covers the shape with pending metadata edits too, because that
+    is the one where the file listing succeeds and the failure used to arrive
+    part way through the work.
+    """
+    path = Path("locked.txt")
+    path.write_text("a record needs a file to be publishable\n")
+    sandbox_client.upload_file(draft_record_id, path, progress=False)
+    published_id = sandbox_client.publish(draft_record_id)
+
+    another = Path("late.txt")
+    another.write_text("this never goes up\n")
+
+    def assert_writes_are_refused():
+        with pytest.raises(RecordNotWritableError, match="create_or_get_new_version"):
+            sandbox_client.upload_files(published_id, [another], progress=False)
+
+        with pytest.raises(RecordNotWritableError):
+            sandbox_client.delete_all_files(published_id, progress=False)
+
+        with pytest.raises(RecordNotWritableError):
+            sandbox_client.inherit_files(published_id)
+
+    assert_writes_are_refused()
+
+    # The other shape: the same record with metadata edits pending, which is
+    # what gives a published record a draft to be confused with
+    sandbox_client.create_or_get_edited_metadata_draft(published_id)
+    assert_writes_are_refused()
+
+    # None of that touched the record
+    assert list(sandbox_client.list_files(published_id)) == ["locked.txt"]
+
+
 def test_editing_a_published_record_in_place(
     sandbox_client, draft_record_id, build_metadata, in_a_working_directory
 ):

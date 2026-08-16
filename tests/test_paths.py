@@ -23,11 +23,17 @@ RECORD_ID = "1234"
 
 
 @pytest.fixture
-def client_and_session(no_token_in_env, make_recording_session):
-    """A client whose session hands back whatever the test scripts"""
+def client_and_session(no_token_in_env, make_recording_session, draft_check_responses):
+    """
+    A client whose session hands back whatever the test scripts
+
+    Every file write starts by checking that the record is still a draft, so
+    the answers to that go in front of what the test asked for. Nothing here is
+    about that check, so no test has to script it.
+    """
 
     def factory(responses=None):
-        session = make_recording_session(responses)
+        session = make_recording_session([*draft_check_responses(), *(responses or [])])
 
         return ZenodoClient(token="a-token", session=session), session  # noqa: S106
 

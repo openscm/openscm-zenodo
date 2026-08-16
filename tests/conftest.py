@@ -7,6 +7,7 @@ See https://docs.pytest.org/en/7.1.x/reference/fixtures.html#conftest-py-sharing
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -129,6 +130,50 @@ def make_recording_session():
     Get a factory for sessions which record requests and return canned responses
     """
     return RecordingSession
+
+
+DRAFT_CHECK_PATH = re.compile(r"/api/records/[^/]+(/draft)?$")
+
+
+def is_draft_check(call):
+    """
+    Was this call the check a file write makes before it writes anything?
+
+    Every file write asks whether the record is still a draft
+    (`ZenodoClient._assert_writable`), which reads the published record and
+    then the draft. Tests about what a write sends are not about those two.
+    """
+    return call["method"] == "GET" and DRAFT_CHECK_PATH.search(call["url"]) is not None
+
+
+@pytest.fixture
+def draft_check_responses(make_response):
+    """
+    Get the responses which tell a file write it is looking at a draft
+
+    Put these in front of a scripted session's own responses:
+    nothing published, then a draft we can see.
+    """
+
+    def factory():
+        return [
+            make_response(status_code=404),
+            make_response(json_body={"id": 1234, "is_draft": True}),
+        ]
+
+    return factory
+
+
+@pytest.fixture
+def write_calls():
+    """
+    Get the calls a session recorded, without the check every file write makes
+    """
+
+    def factory(session):
+        return [call for call in session.calls if not is_draft_check(call)]
+
+    return factory
 
 
 @pytest.fixture

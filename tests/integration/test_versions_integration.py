@@ -76,29 +76,35 @@ def test_new_version_from_a_non_latest_version(sandbox_client, new_version_draft
     assert from_latest == new_version_draft
 
 
-def test_import_files(sandbox_client, new_version_draft):
+def test_inherit_files(sandbox_client, new_version_draft):
     previous = sandbox_client.list_files(
         sandbox_client.get_latest_version_id(VERSIONED_RECORD_ID)
     )
     assert previous
 
-    assert sandbox_client.import_files(new_version_draft) is True
+    inherited = sandbox_client.inherit_files(new_version_draft)
 
+    # What comes back is read out of the import's own response,
+    # so this is also the check that Zenodo answers it with the listing
+    assert inherited.keys() == previous.keys()
     assert sandbox_client.list_files(new_version_draft).keys() == previous.keys()
 
 
-def test_import_files_skips_when_the_draft_has_files(sandbox_client, new_version_draft):
+def test_inherit_files_leaves_a_draft_with_files_alone(
+    sandbox_client, new_version_draft
+):
     """
     Zenodo will not import into a draft which already has files
 
-    Skipping rather than failing is what lets a release script be re-run.
+    Leaving it alone rather than failing is what lets a release script be
+    re-run, and the draft's files are what comes back either way.
     """
-    sandbox_client.import_files(new_version_draft)
+    first = sandbox_client.inherit_files(new_version_draft)
 
-    assert sandbox_client.import_files(new_version_draft) is False
+    assert sandbox_client.inherit_files(new_version_draft).keys() == first.keys()
 
 
-def test_import_files_into_a_draft_with_files_would_fail(
+def test_importing_into_a_draft_with_files_would_fail(
     sandbox_client, new_version_draft, in_a_working_directory
 ):
     """

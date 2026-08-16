@@ -195,9 +195,13 @@ def test_is_draft_record_not_found_with_a_token(
 ):
     """
     Nothing published and no draft we can see means we say we cannot find it
+
+    The published record is asked for twice: the record may have been published
+    while we were asking, which removes the draft, so both of the first two
+    misses would be misses on a record which is there.
     """
     session = make_recording_session(
-        [make_response(status_code=status_code) for _ in range(2)]
+        [make_response(status_code=status_code) for _ in range(3)]
     )
     client = ZenodoClient(token="a-token", session=session)  # noqa: S106
 
@@ -246,7 +250,7 @@ def test_is_draft_record_not_found_names_the_token_and_the_domain(
     """
     monkeypatch.setenv("ZENODO_TOKEN", "a-production-token")
 
-    session = make_recording_session([make_response(status_code=404) for _ in range(2)])
+    session = make_recording_session([make_response(status_code=404) for _ in range(3)])
     client = ZenodoClient(zenodo_domain=ZenodoDomain.sandbox, session=session)
 
     with pytest.raises(RecordNotFoundError) as exc_info:
@@ -436,8 +440,8 @@ def test_upload_files_nothing_to_do(fake_zenodo, local_files):
 
     client.upload_files(RECORD_ID, list(local_files.values()), n_threads=1)
 
-    # Only the listing, nothing else
-    assert [method for method, _ in zenodo.calls] == ["GET"]
+    # The check that the record is still writable, then the listing, nothing else
+    assert [method for method, _ in zenodo.calls] == ["GET", "GET", "GET"]
 
 
 def test_delete_files(fake_zenodo):
@@ -501,7 +505,7 @@ def test_upload_files_surfaces_failures(fake_zenodo, local_files, monkeypatch):
     """
     client, zenodo = fake_zenodo()
 
-    real_upload_file = ZenodoClient.upload_file
+    real_upload_file = ZenodoClient._upload_file
 
     def upload_file(self, record_id, path, **kwargs):
         if path.name == "a.txt":
@@ -510,8 +514,10 @@ def test_upload_files_surfaces_failures(fake_zenodo, local_files, monkeypatch):
 
         return real_upload_file(self, record_id, path, **kwargs)
 
-    # The client is a slots class, so this has to be patched on the class
-    monkeypatch.setattr(ZenodoClient, "upload_file", upload_file)
+    # The client is a slots class, so this has to be patched on the class.
+    # `upload_files` uploads through the unguarded `_upload_file`, which is
+    # what asks the record whether it is writable once for the whole batch.
+    monkeypatch.setattr(ZenodoClient, "_upload_file", upload_file)
 
     with pytest.raises(ValueError, match="boom"):
         client.upload_files(RECORD_ID, list(local_files.values()), n_threads=1)

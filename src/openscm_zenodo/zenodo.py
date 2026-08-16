@@ -12,7 +12,7 @@ import os
 import os.path
 import tempfile
 import urllib.parse
-from collections.abc import Callable, Collection, Mapping
+from collections.abc import Callable, Collection, Iterator, Mapping
 from enum import Enum, auto
 from functools import partial
 from pathlib import Path
@@ -1249,6 +1249,31 @@ def _run_in_parallel(
     return [future.result() for future in futures]
 
 
+def parse_file_listing(
+    response: requests.models.Response,
+) -> dict[str, FileEntry]:
+    """
+    Read a listing of a record's files out of a response
+
+    Zenodo answers both the file listings and the files-import action with the
+    same document, so both are read the same way.
+
+    Parameters
+    ----------
+    response
+        Response to read
+
+    Returns
+    -------
+    :
+        The files, keyed by their name on Zenodo
+    """
+    entries = cast(list[dict[str, Any]], response.json()["entries"])
+    parsed = [FileEntry.from_json(entry) for entry in entries]
+
+    return {entry.filename: entry for entry in parsed}
+
+
 def get_reported_errors(
     response: requests.models.Response, *, fields: Collection[str] | None = None
 ) -> str | None:
@@ -1863,6 +1888,90 @@ class ZenodoClient:
 
         return f"/api/records/{record_id}/draft/files/{quoted}{suffix}"
 
+    def _assert_writable(self, record_id: str | RecordID) -> None:
+        """
+        Check that a record's files can still be changed
+
+        Zenodo locks a record's files when it is published,
+        so every file write refuses to start against a published record
+        rather than failing part way through a batch.
+
+        Call this from the public entry points only.
+        The private helpers they use are unguarded,
+        so that uploading fifty files asks the question once, not fifty times.
+
+        Parameters
+        ----------
+        record_id
+            ID of the record whose files we are about to change
+
+        Raises
+        ------
+        MissingTokenError
+            We have no token, so the write could not have gone out anyway
+
+        RecordNotWritableError
+            The record is published
+
+        RecordNotFoundError
+            There is no record with this ID
+        """
+        if not self.token:
+            # Asked here because, without a token, a draft is invisible
+            # so the next call would give misleading information.
+            description = f"write files to record {record_id!r}"
+
+            raise MissingTokenError(
+                description,
+                zenodo_domain=self.zenodo_domain_url,
+                env_vars=get_token_env_vars(self.zenodo_domain),
+            )
+
+        if not self.is_draft(record_id):
+            raise RecordNotWritableError(
+                str(record_id), zenodo_domain=self.zenodo_domain_url
+            )
+
+    @contextlib.contextmanager
+    def _writing_files(self, record_id: str | RecordID) -> Iterator[None]:
+        """
+        Report a refused file write as the reason it was refused
+
+        A record can be published between
+        [`_assert_writable`][openscm_zenodo.zenodo.ZenodoClient._assert_writable]
+        and the write itself. Zenodo then refuses the write,
+        with a `404` if it has no draft
+        and a `403` if it has one whose files are locked.
+        Neither says the thing the caller needs to hear,
+        so both are turned into the error the guard would have raised
+        and the race becomes indistinguishable from the ordinary case.
+
+        Parameters
+        ----------
+        record_id
+            ID of the record we are writing to
+
+        Yields
+        ------
+        :
+            Nothing, this only translates what comes out
+        """
+        try:
+            yield
+
+        except ZenodoHTTPError as exc:
+            if exc.response.status_code not in (HTTP_FORBIDDEN, HTTP_NOT_FOUND):
+                raise
+
+            # A `404` also covers "no such file", which is a different thing
+            # entirely, so only claim the record is published if it is.
+            if self.is_draft(record_id):
+                raise
+
+            raise RecordNotWritableError(
+                str(record_id), zenodo_domain=self.zenodo_domain_url
+            ) from exc
+
     def delete_file(self, record_id: RecordIDLike, filename: str) -> None:
         """
         Delete a file from a record
@@ -1877,14 +1986,40 @@ class ZenodoClient:
 
         filename
             Name of the file to delete, as it appears on Zenodo
+
+        Raises
+        ------
+        RecordNotWritableError
+            The record is published, so its files cannot be changed
         """
         record_id = get_record_id(record_id)
-        self._request(
-            self._get_draft_file_path(record_id, filename),
-            method="DELETE",
-            requires_auth=True,
-            description=f"delete {filename!r} from {record_id!r}",
-        )
+        self._assert_writable(record_id)
+        self._delete_file(record_id, filename)
+
+    def _delete_file(self, record_id: str | RecordID, filename: str) -> None:
+        """
+        Delete a file from a record's draft
+
+        This private method does not check that the record is a draft.
+        If you are a user, use
+        [`delete_file`][openscm_zenodo.zenodo.ZenodoClient.delete_file].
+
+        Parameters
+        ----------
+        record_id
+            Record from which to delete the file
+
+        filename
+            Name of the file to delete, as it appears on Zenodo
+        """
+        with self._writing_files(record_id):
+            self._request(
+                self._get_draft_file_path(record_id, filename),
+                method="DELETE",
+                requires_auth=True,
+                description=f"delete {filename!r} from {record_id!r}",
+            )
+
         logger.info(f"Deleted {filename!r} from record {record_id!r}")
 
     def _initialise_file(self, record_id: str, filename: str) -> None:
@@ -1930,7 +2065,7 @@ class ZenodoClient:
                 "assuming it is already there. "
                 "Deleting it and initialising again."
             )
-            self.delete_file(record_id, filename)
+            self._delete_file(record_id, filename)
             initialise_file()
 
     def _upload_file_content(
@@ -2067,12 +2202,16 @@ class ZenodoClient:
         ChecksumMismatchError
             `local_md5` was supplied and does not match the checksum
             reported by Zenodo
+
+        RecordNotWritableError
+            The record was published before we got here
         """
-        self._initialise_file(record_id, filename)
-        self._upload_file_content(
-            record_id, path, filename=filename, progress=progress, position=position
-        )
-        entry = self._commit_file(record_id, filename)
+        with self._writing_files(record_id):
+            self._initialise_file(record_id, filename)
+            self._upload_file_content(
+                record_id, path, filename=filename, progress=progress, position=position
+            )
+            entry = self._commit_file(record_id, filename)
 
         if local_md5 is not None:
             assert_md5_matches(
@@ -2099,7 +2238,7 @@ class ZenodoClient:
             Name of the file whose upload failed
         """
         try:
-            self.delete_file(record_id, filename)
+            self._delete_file(record_id, filename)
 
         except ZenodoError as exc:
             logger.warning(
@@ -2190,10 +2329,76 @@ class ZenodoClient:
             `verify_checksum` is `True` and the upload was corrupted
             on every attempt
 
+        RecordNotWritableError
+            The record is published, so its files cannot be changed
+
         ZenodoHTTPError
             Zenodo rejected the upload
         """
         record_id = get_record_id(record_id)
+        self._assert_writable(record_id)
+
+        return self._upload_file(
+            record_id,
+            path,
+            verify_checksum=verify_checksum,
+            local_md5=local_md5,
+            progress=progress,
+            position=position,
+            max_attempts=max_attempts,
+            warn_path_stripped=warn_path_stripped,
+        )
+
+    def _upload_file(  # noqa: PLR0913
+        self,
+        record_id: str | RecordID,
+        path: Path,
+        *,
+        verify_checksum: bool = True,
+        local_md5: str | None = None,
+        progress: bool = True,
+        position: int | None = None,
+        max_attempts: int = 5,
+        warn_path_stripped: bool = True,
+    ) -> FileEntry:
+        """
+        Upload a file to a record's draft
+
+        This private method does not check that the record is a draft.
+        If you are a user, use
+        [`upload_file`][openscm_zenodo.zenodo.ZenodoClient.upload_file].
+
+        Parameters
+        ----------
+        record_id
+            ID of the record whose draft to upload to
+
+        path
+            File to upload
+
+        verify_checksum
+            Should we check that Zenodo received the bytes we sent?
+
+        local_md5
+            MD5 checksum of `path`, if you have already calculated it
+
+        progress
+            Should a progress bar be shown?
+
+        position
+            Line to display the progress bar on
+
+        max_attempts
+            Maximum number of times to try the upload before giving up
+
+        warn_path_stripped
+            Should we warn if the file's local directories are about to be lost?
+
+        Returns
+        -------
+        :
+            The file's entry on the draft, as Zenodo reports it once committed
+        """
         filename = path.name
         logger.debug(f"Uploading {path} as {filename!r} to record {record_id!r}")
 
@@ -2218,6 +2423,9 @@ class ZenodoClient:
                 progress=progress,
                 position=position,
             )
+
+        except RecordNotWritableError:
+            raise
 
         except Exception:
             self._clean_up_failed_upload(record_id, filename)
@@ -2256,10 +2464,7 @@ class ZenodoClient:
             description=f"list the files on record {record_id!r}",
         )
 
-        entries = cast(list[dict[str, Any]], response.json()["entries"])
-        parsed = [FileEntry.from_json(entry) for entry in entries]
-
-        return {entry.filename: entry for entry in parsed}
+        return parse_file_listing(response)
 
     def _can_see(self, path: str, *, requires_auth: bool, description: str) -> bool:
         """
@@ -2353,12 +2558,25 @@ class ZenodoClient:
 
         # It only makes sense to look for draft information
         # if we have a token (draft information can't be accessed otherwise).
-        if self.token and self._can_see(
-            f"/api/records/{record_id}/draft",
-            requires_auth=True,
-            description=description,
-        ):
-            return True
+        if self.token:
+            if self._can_see(
+                f"/api/records/{record_id}/draft",
+                requires_auth=True,
+                description=description,
+            ):
+                return True
+
+            # Somebody may have published the record between
+            # asking if the record is there
+            # and the check for the draft record just above,
+            # so check one final time.
+            if self._published_record_exists(record_id):
+                logger.debug(
+                    f"Record {record_id!r} was published "
+                    "while we were working out whether it was a draft"
+                )
+
+                return False
 
         raise RecordNotFoundError(
             str(record_id),
@@ -2381,7 +2599,25 @@ class ZenodoClient:
             The record's files, keyed by their name on Zenodo
         """
         record_id = get_record_id(record_id)
-        return self._list_files_at(record_id, draft=self.is_draft(record_id))
+        draft = self.is_draft(record_id)
+
+        try:
+            return self._list_files_at(record_id, draft=draft)
+
+        except ZenodoHTTPError as exc:
+            published_in_the_meantime = (
+                draft and exc.response.status_code == HTTP_NOT_FOUND
+            )
+            if not published_in_the_meantime:
+                raise
+
+            logger.debug(
+                f"Record {record_id!r} was published "
+                "between asking whether it was a draft and listing its files, "
+                "so we are listing the published record's files instead"
+            )
+
+            return self._list_files_at(record_id, draft=False)
 
     def _diff_files(self, record_id: RecordIDLike, want: dict[str, Path]) -> FileDiff:
         """
@@ -2438,6 +2674,9 @@ class ZenodoClient:
         """
         Upload the files a diff says need uploading
 
+        This private method does not check that the record is a draft,
+        use with caution.
+
         Parameters
         ----------
         record_id
@@ -2468,7 +2707,7 @@ class ZenodoClient:
 
         def upload_one(path: Path) -> FileEntry:
             with positions.slot() as position:
-                return self.upload_file(
+                return self._upload_file(
                     record_id,
                     path,
                     local_md5=diff.to_upload[path],
@@ -2544,6 +2783,9 @@ class ZenodoClient:
         DuplicateFileKeyError
             Several paths would land under one name, raised before any request
 
+        RecordNotWritableError
+            The record is published, so its files cannot be changed
+
         Notes
         -----
         There is no `verify_checksum` argument here, unlike
@@ -2560,6 +2802,7 @@ class ZenodoClient:
         if warn_path_stripped:
             warn_about_stripped_paths(paths)
 
+        self._assert_writable(record_id)
         diff = self._diff_files(record_id, want)
 
         logger.debug(
@@ -2639,12 +2882,16 @@ class ZenodoClient:
             [`upload_files`][openscm_zenodo.zenodo.ZenodoClient.upload_files]:
             a collision would make the draft's file list disagree with `paths`,
             and this method deletes whatever is not in that list.
+
+        RecordNotWritableError
+            The record is published, so its files cannot be changed
         """
         record_id = get_record_id(record_id)
         want = get_upload_filenames(paths)
         if warn_path_stripped:
             warn_about_stripped_paths(paths)
 
+        self._assert_writable(record_id)
         diff = self._diff_files(record_id, want)
 
         logger.debug(
@@ -2657,7 +2904,7 @@ class ZenodoClient:
         # Delete before uploading, so that renaming a large file
         # does not need room for both copies at once
         if diff.to_delete:
-            self.delete_files(record_id, diff.to_delete, progress=progress)
+            self._delete_files(record_id, diff.to_delete, progress=progress)
 
         uploaded = self._upload_diff(
             record_id,
@@ -2742,6 +2989,9 @@ class ZenodoClient:
         DuplicateFileKeyError
             Several paths would land in the same place inside the archive
 
+        RecordNotWritableError
+            The record is published, so its files cannot be changed
+
         Notes
         -----
         To upload several archives, build them with
@@ -2749,6 +2999,8 @@ class ZenodoClient:
         `upload_files`, which is two lines and keeps this method single-purpose.
         """
         record_id = get_record_id(record_id)
+        # Ask before building the archive, which is the expensive part
+        self._assert_writable(record_id)
 
         if not zip_name.endswith(".zip"):
             warn_openscm_zenodo(
@@ -2766,7 +3018,7 @@ class ZenodoClient:
             dest = into / zip_name
             zip_files(paths, dest, base_dir=base_dir, progress=progress)
 
-            return self.upload_file(
+            return self._upload_file(
                 record_id,
                 dest,
                 progress=progress,
@@ -2805,18 +3057,51 @@ class ZenodoClient:
 
         progress
             Should a progress bar be shown?
+
+        Raises
+        ------
+        RecordNotWritableError
+            The record is published, so its files cannot be changed
         """
         record_id = get_record_id(record_id)
         if not filenames:
             return
 
+        self._assert_writable(record_id)
+        self._delete_files(record_id, filenames, progress=progress)
+
+    def _delete_files(
+        self,
+        record_id: str | RecordID,
+        filenames: Collection[str],
+        *,
+        progress: bool = True,
+    ) -> None:
+        """
+        Delete files from a record's draft
+
+        This private method does not check that the record is a draft.
+        If you are a user, use
+        [`delete_files`][openscm_zenodo.zenodo.ZenodoClient.delete_files].
+
+        Parameters
+        ----------
+        record_id
+            ID of the record whose draft to delete from
+
+        filenames
+            Names of the files to delete, as they appear on Zenodo
+
+        progress
+            Should a progress bar be shown?
+        """
         logger.debug(f"Deleting {len(filenames)} file(s) from record {record_id!r}")
 
         with get_files_progress_bar(
             desc="Deleting", total=len(filenames), progress=progress
         ) as progress_bar:
             for filename in filenames:
-                self.delete_file(record_id, filename)
+                self._delete_file(record_id, filename)
                 progress_bar.update(1)
 
         logger.info(f"Deleted {len(filenames)} file(s) from record {record_id!r}")
@@ -2834,9 +3119,15 @@ class ZenodoClient:
 
         progress
             Should a progress bar be shown?
+
+        Raises
+        ------
+        RecordNotWritableError
+            The record is published, so its files cannot be changed
         """
         record_id = get_record_id(record_id)
-        self.delete_files(
+        self._assert_writable(record_id)
+        self._delete_files(
             record_id,
             tuple(self._list_files_at(record_id, draft=True)),
             progress=progress,
@@ -3902,14 +4193,14 @@ class ZenodoClient:
         return RecordID(str(latest["id"]))
 
     def create_or_get_new_version(
-        self, record_id: RecordIDLike, *, import_files: bool = False
+        self, record_id: RecordIDLike, *, inherit_files: bool = False
     ) -> RecordID:
         """
         Create a new version of a published record, or get the one already going
 
         The new version is a draft with **no files**.
-        Pass `import_files=True`, or call
-        [`import_files`][openscm_zenodo.zenodo.ZenodoClient.import_files],
+        Pass `inherit_files=True`, or call
+        [`inherit_files`][openscm_zenodo.zenodo.ZenodoClient.inherit_files],
         to carry the previous version's files over.
 
         This is create-or-get, which the name is meant to make plain.
@@ -3927,7 +4218,7 @@ class ZenodoClient:
         record_id
             ID of any published version of the record, or the record itself
 
-        import_files
+        inherit_files
             Should the previous version's files be carried over?
 
         Returns
@@ -3948,56 +4239,65 @@ class ZenodoClient:
 
         logger.info(f"The new version of record {record_id!r} is {new_version_id!r}")
 
-        if import_files:
-            self.import_files(new_version_id)
+        if inherit_files:
+            self.inherit_files(new_version_id)
 
         return new_version_id
 
-    def import_files(self, record_id: RecordIDLike) -> bool:
+    def inherit_files(self, record_id: RecordIDLike) -> dict[str, FileEntry]:
         """
         Carry the previous version's files over to a record's draft
 
         Zenodo copies the files across itself,
         so nothing is uploaded and no storage is duplicated.
 
+        A draft which already has files is left exactly as it is,
+        because Zenodo only allows imports into an empty one.
+
+        Whatever happens, the draft holds the files this returns.
+
         Parameters
         ----------
         record_id
-            ID of the record whose draft to import into
+            ID of the record whose draft to carry the files over to
 
         Returns
         -------
         :
-            Whether the files were imported.
+            The draft's files afterwards, keyed by their name on Zenodo
 
-            This is `False` if the draft already has files on it,
-            in which case there is nothing to do:
-            Zenodo only allows importing into an empty draft
-            (`400 Please remove all files first.`).
-            Skipping rather than failing is what makes a release script
-            safe to re-run after it has failed part way through.
+        Raises
+        ------
+        RecordNotWritableError
+            The record is published, so its files cannot be changed.
         """
         record_id = get_record_id(record_id)
+        self._assert_writable(record_id)
+
         already_there = self._list_files_at(record_id, draft=True)
         if already_there:
             logger.info(
-                f"Did not import files into record {record_id!r}, "
-                f"it already has {len(already_there)} file(s)"
+                f"Record {record_id!r} kept the {len(already_there)} file(s) it had, "
+                "rather than inheriting the previous version's"
             )
 
-            return False
+            return already_there
 
-        logger.debug(f"Importing the previous version's files into {record_id!r}")
-        self._request(
+        logger.debug(f"Inheriting the previous version's files into {record_id!r}")
+        response = self._request(
             f"/api/records/{record_id}/draft/actions/files-import",
             method="POST",
             requires_auth=True,
-            description=f"import files into record {record_id!r}",
+            description=f"inherit files into record {record_id!r}",
+        )
+        inherited = parse_file_listing(response)
+
+        logger.info(
+            f"Record {record_id!r} inherited "
+            f"{len(inherited)} file(s) from the previous version"
         )
 
-        logger.info(f"Imported the previous version's files into record {record_id!r}")
-
-        return True
+        return inherited
 
     def _check_metadata_before_sending(
         self,
@@ -4951,7 +5251,7 @@ def create_or_get_new_version(  # noqa: PLR0913
         client.update_metadata(new_version_id, metadata)
 
     if files_mode in (FilesMode.inherit, FilesMode.mirror):
-        client.import_files(new_version_id)
+        client.inherit_files(new_version_id)
 
     if files_mode is FilesMode.mirror:
         # `files` cannot be `None` here, that is rejected above
