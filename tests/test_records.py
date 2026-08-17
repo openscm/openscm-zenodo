@@ -7,7 +7,10 @@ from __future__ import annotations
 import pytest
 
 from openscm_zenodo.exceptions import (
+    DraftMetadataEditsNotFoundError,
+    DraftRecordDraftMetadataEditsError,
     OpenSCMZenodoWarning,
+    PublishedRecordDraftError,
     RecordNotFoundError,
     RecordNotWritableError,
     ZenodoError,
@@ -21,6 +24,8 @@ from openscm_zenodo.zenodo import (
 )
 
 RECORD_ID = "1234"
+RECORD_URL = f"https://zenodo.org/api/records/{RECORD_ID}"
+DRAFT_URL = f"{RECORD_URL}/draft"
 
 COMPLETE_METADATA = {
     "title": "A record",
@@ -152,6 +157,135 @@ def test_create_record_says_nothing_about_metadata(
     client.create_record()
 
     assert [w for w in recwarn if issubclass(w.category, OpenSCMZenodoWarning)] == []
+
+
+def test_delete_draft(client_and_session, make_response):
+    client, session = client_and_session(
+        [
+            # The draft we are about to delete
+            make_response(json_body=record_body()),
+            make_response(status_code=204),
+        ]
+    )
+
+    client.delete_draft(RECORD_ID)
+
+    call = session.calls[-1]
+    assert call["method"] == "DELETE"
+    assert call["url"] == DRAFT_URL
+
+
+def test_delete_draft_of_a_published_record(client_and_session, make_response):
+    """
+    Nothing is sent: a published record cannot be deleted, so we do not try
+    """
+    client, session = client_and_session(
+        [
+            make_response(status_code=404, url=DRAFT_URL),
+            # Our look at why, which finds the published record
+            make_response(json_body=record_body(is_published=True)),
+        ]
+    )
+
+    with pytest.raises(PublishedRecordDraftError):
+        client.delete_draft(RECORD_ID)
+
+    assert [call["method"] for call in session.calls] == ["GET", "GET"]
+
+
+def test_delete_draft_of_a_record_with_metadata_edits(
+    client_and_session, make_response
+):
+    """
+    Pending metadata edits are not a draft record, and are not deleted here
+
+    The same endpoint serves both and would have answered this one, so refusing
+    it is ours to do. It is also the case where obeying would have been the
+    wrong kind of destructive: `DELETE` on these discards the edits and leaves
+    the published record alone.
+    """
+    edits = record_body()
+    # Both, which is the shape only an edited metadata draft has
+    edits["is_published"] = True
+
+    client, session = client_and_session([make_response(json_body=edits)])
+
+    with pytest.raises(PublishedRecordDraftError, match="is published"):
+        client.delete_draft(RECORD_ID)
+
+    assert [call["method"] for call in session.calls] == ["GET"]
+
+
+def test_delete_draft_of_a_record_which_is_not_there(client_and_session, make_response):
+    client, session = client_and_session(
+        [
+            make_response(status_code=404, url=DRAFT_URL),
+            make_response(status_code=404, url=RECORD_URL),
+        ]
+    )
+
+    with pytest.raises(RecordNotFoundError):
+        client.delete_draft(RECORD_ID)
+
+    assert [call["method"] for call in session.calls] == ["GET", "GET"]
+
+
+def test_discard_edited_metadata_draft(client_and_session, make_response):
+    edits = record_body()
+    edits["is_published"] = True
+
+    client, session = client_and_session(
+        [
+            # `is_draft`, which finds the published record
+            make_response(json_body=record_body(is_published=True)),
+            make_response(json_body=edits),
+            make_response(status_code=204),
+        ]
+    )
+
+    client.discard_edited_metadata_draft(RECORD_ID)
+
+    call = session.calls[-1]
+    assert call["method"] == "DELETE"
+    assert call["url"] == DRAFT_URL
+
+
+def test_discard_edited_metadata_draft_of_a_draft(client_and_session, make_response):
+    """
+    An unpublished record has no separate edits, and is not deleted by asking
+
+    Getting this wrong would destroy the record, which is why the guard is not
+    left to Zenodo: the request the two cases send is identical.
+    """
+    client, session = client_and_session(
+        [
+            make_response(status_code=404, url=RECORD_URL),
+            make_response(json_body=record_body()),
+        ]
+    )
+
+    with pytest.raises(DraftRecordDraftMetadataEditsError, match="already a draft"):
+        client.discard_edited_metadata_draft(RECORD_ID)
+
+    assert [call["method"] for call in session.calls] == ["GET", "GET"]
+
+
+def test_discard_edited_metadata_draft_when_there_are_none(
+    client_and_session, make_response
+):
+    client, session = client_and_session(
+        [
+            make_response(json_body=record_body(is_published=True)),
+            make_response(status_code=404, url=DRAFT_URL),
+            # Our look at why, which finds the published record
+            make_response(json_body=record_body(is_published=True)),
+        ]
+    )
+
+    with pytest.raises(DraftMetadataEditsNotFoundError):
+        client.discard_edited_metadata_draft(RECORD_ID)
+
+    assert [call["method"] for call in session.calls] == ["GET", "GET", "GET"]
 
 
 def test_update_access_sends_the_metadata_back(client_and_session, make_response):

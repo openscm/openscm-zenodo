@@ -13,10 +13,21 @@ from pathlib import Path
 import pytest
 
 from openscm_zenodo.exceptions import (
+    DraftMetadataEditsNotFoundError,
+    MissingTokenError,
     PublishedRecordDraftError,
     RecordNotWritableError,
+    ZenodoHTTPError,
 )
-from openscm_zenodo.zenodo import FilesMode, create_or_get_new_version
+from openscm_zenodo.zenodo import (
+    Access,
+    FilesMode,
+    ZenodoClient,
+    ZenodoDomain,
+    create_or_get_new_version,
+)
+
+HTTP_FORBIDDEN = 403
 
 pytestmark = pytest.mark.zenodo_token
 
@@ -143,6 +154,12 @@ def test_editing_a_published_record_in_place(
     edits = sandbox_client.create_or_get_edited_metadata_draft(published_id)
     assert edits.is_edited_metadata_draft
     assert sandbox_client.has_edited_metadata_draft(published_id)
+    # Create-or-get: asking again gets the edits already in progress rather
+    # than a second draft, which is what makes a re-run safe
+    assert (
+        sandbox_client.create_or_get_edited_metadata_draft(published_id).record_id
+        == edits.record_id
+    )
     # The record is still published: pending edits do not make it a draft
     assert not sandbox_client.is_draft(published_id)
 
@@ -161,3 +178,86 @@ def test_editing_a_published_record_in_place(
     assert sandbox_client.publish(published_id) == published_id
 
     assert sandbox_client.get_metadata(published_id).title == "Corrected"
+
+
+def test_a_published_record_cannot_be_deleted_but_its_edits_can(
+    sandbox_client, draft_record_id, build_metadata, in_a_working_directory
+):
+    """
+    The two halves of the delete endpoint, told apart on a real record
+
+    Zenodo serves both from `DELETE /api/records/{id}/draft`, and the request
+    is identical, so which of the two you get is decided entirely by the
+    record's state. `delete_draft` refuses a published record in both of its
+    shapes; `discard_edited_metadata_draft` throws the pending edits away and
+    leaves the published record saying exactly what it said before.
+    """
+    path = Path("published-for-good.txt")
+    path.write_text("a record needs a file to be publishable\n")
+    sandbox_client.upload_file(draft_record_id, path, progress=False)
+    sandbox_client.update_metadata(draft_record_id, build_metadata("As published"))
+    published_id = sandbox_client.publish(draft_record_id)
+
+    with pytest.raises(PublishedRecordDraftError):
+        sandbox_client.delete_draft(published_id)
+
+    sandbox_client.create_or_get_edited_metadata_draft(published_id)
+    sandbox_client.update_metadata(published_id, build_metadata("Never released"))
+
+    # The shape with edits pending is refused too, and it is the one which
+    # would otherwise have discarded them under the name of deleting a draft
+    with pytest.raises(PublishedRecordDraftError):
+        sandbox_client.delete_draft(published_id)
+
+    sandbox_client.discard_edited_metadata_draft(published_id)
+
+    assert not sandbox_client.has_edited_metadata_draft(published_id)
+    assert sandbox_client.get_metadata(published_id).title == "As published"
+    # And there is nothing left to discard, which is said rather than shrugged at
+    with pytest.raises(DraftMetadataEditsNotFoundError):
+        sandbox_client.discard_edited_metadata_draft(published_id)
+
+
+def test_restricted_files_need_a_token(
+    sandbox_client, draft_record_id, in_a_working_directory, tmp_path
+):
+    """
+    Restricted files are readable by their owner and by nobody else
+
+    There is no separate path for these: access is just the token on the
+    session, so the same methods serve public and restricted records.
+    The record's *metadata* stays public, which is why the refusal arrives at
+    the file listing rather than when the record is looked up.
+    """
+    path = Path("restricted.txt")
+    path.write_text("not for everyone\n")
+    sandbox_client.upload_file(draft_record_id, path, progress=False)
+    sandbox_client.update_access(draft_record_id, Access(files="restricted"))
+
+    published_id = sandbox_client.publish(draft_record_id)
+
+    written = sandbox_client.download_file(
+        published_id, path.name, tmp_path / "with-token.txt", progress=False
+    )
+    assert written.read_text() == path.read_text()
+
+    # A client which cannot find a token, however the machine is set up
+    with pytest.MonkeyPatch.context() as monkeypatch:
+        monkeypatch.delenv("ZENODO_TOKEN", raising=False)
+        monkeypatch.delenv("ZENODO_SANDBOX_TOKEN", raising=False)
+        anonymous = ZenodoClient(zenodo_domain=ZenodoDomain.sandbox)
+
+    with anonymous:
+        assert anonymous.token is None
+        # The record itself is public
+        assert anonymous.get_published(published_id).record_id == published_id
+
+        # Zenodo's answer is a `403`, which we turn into the error which says
+        # what to do about it, because we know we had no token to send
+        with pytest.raises(MissingTokenError) as exc_info:
+            anonymous.download_file(
+                published_id, path.name, tmp_path / "without-token.txt", progress=False
+            )
+
+    assert isinstance(exc_info.value.__cause__, ZenodoHTTPError)
+    assert exc_info.value.__cause__.response.status_code == HTTP_FORBIDDEN

@@ -7,6 +7,8 @@ The publish-side story is in `test_publish_integration.py`.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 import requests
 
@@ -28,13 +30,6 @@ pytestmark = pytest.mark.zenodo_token
 
 HTTP_NOT_FOUND = 404
 HTTP_FORBIDDEN = 403
-
-
-def delete(client, record_id):
-    """Delete a record we made, so the sandbox is not littered"""
-    client._request(
-        f"/api/records/{record_id}/draft", method="DELETE", requires_auth=True
-    )
 
 
 def test_create_record(sandbox_client):
@@ -59,7 +54,30 @@ def test_create_record(sandbox_client):
         assert sandbox_client.get_draft(created).record_id == created.record_id
 
     finally:
-        delete(sandbox_client, created.record_id)
+        sandbox_client.delete_draft(created.record_id)
+
+
+def test_delete_draft(sandbox_client, in_a_working_directory):
+    """
+    An unpublished record, files and all, can be taken back off Zenodo
+    """
+    created = sandbox_client.create_record()
+    path = Path("regrettable.txt")
+    path.write_text("this should not have been uploaded\n")
+    sandbox_client.upload_file(created, path, progress=False)
+
+    sandbox_client.delete_draft(created)
+
+    with pytest.raises(RecordNotFoundError):
+        sandbox_client.get_record(created.record_id)
+
+
+def test_delete_draft_of_a_record_which_is_not_there(sandbox_client):
+    """
+    A record which is not there is said to be missing, not deleted quietly
+    """
+    with pytest.raises(RecordNotFoundError):
+        sandbox_client.delete_draft("0")
 
 
 def test_a_new_record_is_invisible_to_everyone_else(sandbox_client, build_metadata):
@@ -91,7 +109,7 @@ def test_a_new_record_is_invisible_to_everyone_else(sandbox_client, build_metada
         }
 
     finally:
-        delete(sandbox_client, created.record_id)
+        sandbox_client.delete_draft(created.record_id)
 
 
 def test_update_access_to_restricted_files(sandbox_client, draft_record_id):
@@ -159,7 +177,7 @@ def test_files_cannot_be_disabled_and_zenodo_does_not_say_so_loudly(sandbox_clie
         assert was_field_sent({"files": {"enabled": False}}, "files.enabled")
 
     finally:
-        delete(sandbox_client, str(body["id"]))
+        sandbox_client.delete_draft(str(body["id"]))
 
 
 def test_update_access_keeps_the_metadata(sandbox_client, draft_record_id):

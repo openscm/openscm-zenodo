@@ -6,11 +6,9 @@ from __future__ import annotations
 
 import pytest
 
-from openscm_zenodo.exceptions import ZenodoHTTPError
+from openscm_zenodo.exceptions import PublishedRecordDraftError
 from openscm_zenodo.metadata import Creator, Metadata, Subject
 from openscm_zenodo.zenodo import ZenodoClient, ZenodoDomain
-
-HTTP_NOT_FOUND = 404
 
 
 @pytest.fixture
@@ -89,26 +87,16 @@ def sandbox_client():
 
 @pytest.fixture
 def draft_record_id(sandbox_client):
-    """
-    An unpublished record to work on, deleted once the test is done
-
-    Deleting still goes through `_request`: creating a record is public API,
-    deleting one is not (yet).
-    """
+    """An unpublished record to work on, deleted once the test is done"""
     record_id = sandbox_client.create_record().record_id
     sandbox_client.update_metadata(record_id, DRAFT_METADATA)
 
     yield record_id
 
     try:
-        sandbox_client._request(
-            f"/api/records/{record_id}/draft",
-            method="DELETE",
-            requires_auth=True,
-        )
+        sandbox_client.delete_draft(record_id)
 
-    except ZenodoHTTPError as exc:
-        # A draft which was published is no longer a draft, so there is
-        # nothing left to clean up. Anything else is worth knowing about.
-        if exc.response.status_code != HTTP_NOT_FOUND:
-            raise
+    except PublishedRecordDraftError:
+        # A draft which the test published is no longer a draft, and a
+        # published record cannot be deleted, so there is nothing to clean up
+        pass

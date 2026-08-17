@@ -22,6 +22,7 @@ NONEXISTENT_RECORD_ID = "999999999999"
 """An ID which no record has"""
 
 
+@pytest.mark.zenodo_live_read
 def test_download_file_from_a_published_record(tmp_path):
     """
     Downloading a public file needs no token
@@ -39,6 +40,7 @@ def test_download_file_from_a_published_record(tmp_path):
     assert get_file_md5(written) == files[name].md5
 
 
+@pytest.mark.zenodo_live_read
 def test_download_file_not_on_the_record(tmp_path):
     with ZenodoClient() as client:
         with pytest.raises(FileNotOnRecordError, match="definitely-not-here"):
@@ -47,6 +49,7 @@ def test_download_file_not_on_the_record(tmp_path):
             )
 
 
+@pytest.mark.zenodo_live_read
 def test_record_which_does_not_exist_without_a_token(no_token_in_env):
     """
     A record we cannot find is reported plainly, and says a token might help
@@ -86,6 +89,7 @@ def test_is_draft_against_real_records(sandbox_client, draft_record_id):
     assert sandbox_client.is_draft(VERSIONED_RECORD_ID) is False
 
 
+@pytest.mark.zenodo_live_read
 def test_download_files_helper_from_a_published_record(tmp_path):
     """
     The one-shot helper, against a real record

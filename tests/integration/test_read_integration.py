@@ -22,6 +22,8 @@ from openscm_zenodo.zenodo import (
     ZenodoClient,
 )
 
+pytestmark = pytest.mark.zenodo_live_read
+
 PUBLISHED_RECORD_ID = "4589756"
 """A published record which is not going anywhere, also our docstring example"""
 

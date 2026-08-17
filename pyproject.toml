@@ -174,7 +174,8 @@ doctest_optionflags = [
     "NORMALIZE_WHITESPACE",  # treat whitespace sanely
 ]
 markers = [
-    "zenodo_token: test requires ZENODO_TOKEN environment variable to be set",
+    "zenodo_token: test writes to the Zenodo sandbox, so it needs a sandbox token",
+    "zenodo_live_read: test reads from production Zenodo and needs no credentials",
 ]
 
 [tool.ruff]

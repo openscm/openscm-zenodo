@@ -231,6 +231,7 @@ def test_upload_files_zip(draft_record_id, in_a_working_directory):
         assert archive.namelist() == ["2025/a.txt"]
 
 
+@pytest.mark.zenodo_live_read
 def test_retrieve_citation():
     """This reads a published production record, so it needs no token"""
     res = runner.invoke(app, ["retrieve-citation", PUBLISHED_RECORD_ID])
@@ -239,6 +240,7 @@ def test_retrieve_citation():
     assert res.stdout.startswith("@dataset{")
 
 
+@pytest.mark.zenodo_live_read
 def test_retrieve_citation_styled(tmp_path):
     output = tmp_path / "citation.txt"
 

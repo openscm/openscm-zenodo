@@ -3688,6 +3688,47 @@ class ZenodoClient:
 
         return draft
 
+    def delete_draft(self, record_id: RecordIDLike) -> None:
+        """
+        Delete an unpublished record
+
+        **This cannot be undone.** The record and its files are gone and its ID
+        is not reused.
+
+        Only a record which has never been published can be deleted: Zenodo does
+        not remove a published record through the API at all. The pending
+        metadata edits a published record can have are thrown away with
+        [`discard_edited_metadata_draft`][openscm_zenodo.zenodo.ZenodoClient.discard_edited_metadata_draft],
+        which is a different thing served by the same endpoint.
+
+        Parameters
+        ----------
+        record_id
+            ID of the record to delete, or the record itself
+
+        Raises
+        ------
+        PublishedRecordDraftError
+            The record is published, so it is not a draft
+
+        RecordNotFoundError
+            There is no record with this ID at all
+        """
+        record_id = get_record_id(record_id)
+        # Reading the draft first is the guard: it raises for a published record
+        # and for an ID which is not there, which are the two ways this could
+        # destroy something other than what was meant.
+        self.get_draft(record_id)
+
+        self._request(
+            f"/api/records/{record_id}/draft",
+            method="DELETE",
+            requires_auth=True,
+            description=f"delete draft record {record_id!r}",
+        )
+
+        logger.info(f"Deleted draft record {record_id!r}")
+
     def get_edited_metadata_draft(self, record_id: RecordIDLike) -> Record:
         """
         Read a published record's unpublished metadata edits
@@ -3857,6 +3898,48 @@ class ZenodoClient:
                 f"work out whether record {record_id!r} has unpublished metadata edits"
             ),
         )
+
+    def discard_edited_metadata_draft(self, record_id: RecordIDLike) -> None:
+        """
+        Throw away a published record's unpublished metadata edits
+
+        The published record is untouched: it goes on saying what it said before
+        the edits were started, and the edits can be started again with
+        [`create_or_get_edited_metadata_draft`][openscm_zenodo.zenodo.ZenodoClient.create_or_get_edited_metadata_draft].
+        [`delete_draft`][openscm_zenodo.zenodo.ZenodoClient.delete_draft] is
+        served by the same endpoint and is the one which cannot be undone.
+
+        Parameters
+        ----------
+        record_id
+            ID of the published record whose edits to discard, or the record itself
+
+        Raises
+        ------
+        DraftRecordDraftMetadataEditsError
+            The record has never been published, so it *is* a draft and has no
+            separate metadata edits. Deleting one of those is `delete_draft`.
+
+        DraftMetadataEditsNotFoundError
+            The record is published but nobody has started editing its metadata
+
+        RecordNotFoundError
+            There is no record with this ID at all
+        """
+        record_id = get_record_id(record_id)
+        # Reading the edits first is the guard: it raises for an unpublished
+        # record, whose draft is the record itself, and it is also how asking
+        # about the wrong ID says so rather than quietly doing nothing.
+        self.get_edited_metadata_draft(record_id)
+
+        self._request(
+            f"/api/records/{record_id}/draft",
+            method="DELETE",
+            requires_auth=True,
+            description=f"discard the metadata edits on record {record_id!r}",
+        )
+
+        logger.info(f"Discarded the metadata edits on record {record_id!r}")
 
     def get_record(self, record_id: RecordIDLike) -> Record:
         """

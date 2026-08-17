@@ -31,6 +31,26 @@ Try and keep your merge requests as small as possible
 This makes life much easier for reviewers
 which allows contributions to be accepted at a faster rate.
 
+## Tests
+
+`make test` runs the unit tests and the doctests.
+
+The tests in `tests/integration` talk to Zenodo for real,
+because an API which changes under us is the failure mode we care most about.
+
+- `make test-integration-read-only` runs the ones which only read
+  from production Zenodo. These need no credentials.
+- `make test-integration` runs all of them.
+  The tests which write go to [the sandbox](https://sandbox.zenodo.org),
+  so they need a sandbox token in `ZENODO_SANDBOX_TOKEN`
+  (see `.env.example`, and note that sandbox and production tokens
+  are not interchangeable).
+  Without one they skip, silently, which is worth knowing
+  before concluding that everything passed.
+
+The whole live suite also runs weekly in CI, on `main`
+and on demand, from the "Test against live Zenodo" workflow.
+
 ## Language
 
 We use British English for our development.

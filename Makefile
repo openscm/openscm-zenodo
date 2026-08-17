@@ -41,6 +41,18 @@ ruff-fixes:  ## fix the code using ruff
 test:  ## run the tests
 	uv run --group tests pytest src tests -r a -v --doctest-modules --doctest-report ndiff --cov=openscm_zenodo
 
+.PHONY: test-integration
+test-integration:  ## run the tests which hit Zenodo for real
+    # The tests which write go to the sandbox, so they need a sandbox token.
+    # `.env` is where it lives locally (see `.env.example`);
+    # without one, they skip and only the read-only tests run.
+	@if [ -f .env ]; then set -a; . ./.env; set +a; fi; \
+		uv run --group tests pytest tests/integration -r a -v
+
+.PHONY: test-integration-read-only
+test-integration-read-only:  ## run the integration tests which need no credentials
+	uv run --group tests pytest tests/integration -r a -v -m zenodo_live_read
+
 # Note on code coverage and testing:
 # You must specify cov=src.
 # Otherwise, funny things happen when doctests are involved.

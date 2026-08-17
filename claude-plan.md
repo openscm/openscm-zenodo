@@ -2052,7 +2052,50 @@ lines of Python, so the docs point at `upload_files_as_zip`'s mapping form
 instead.
 
 ---
-## Part 12 — Live-API integration tests (every endpoint we use)
+## Part 12 — Live-API integration tests (every endpoint we use) — ✅ IMPLEMENTED
+
+**Done** (sequencing step 9). The endpoint matrix in 12.2 was already fully
+ticked by Parts 2–14; this step added the scenario tests 12.3 was still missing,
+the `zenodo_live_read` marker, the `make` targets, and the scheduled CI run
+(`.github/workflows/test-zenodo-live.yaml`). Deltas from the text below, all
+deliberate:
+
+- **`zenodo_live_read` selects, it never skips.** `zenodo_token` skips a test
+  when no sandbox token resolves, because such a test cannot run. A read-only
+  test against production can always run, so the new marker is only there to
+  name the credential-free subset — `make test-integration-read-only`, and the
+  claim that these run on every PR including from forks. Giving it skip
+  behaviour would mean inventing a condition it does not have.
+- **The draft fixture stays function-scoped.** 12.1 asked for a session-scoped
+  one. `draft_record_id` creates and deletes a record per test instead, because
+  the suite publishes, mirrors and deletes all the files on a draft — a shared
+  one would arrive at each test in whatever state the last one left it, and the
+  publish tests would consume it outright. One create plus one delete is small
+  next to the uploads in the same test.
+- **A restricted file without a token raises `MissingTokenError`, not
+  `ZenodoHTTPError`.** 12.3 predicted the latter, but Zenodo's `403` meets
+  §1.1.1's rule first: `_request` turns a `401`/`403` we had no token for into
+  the error which names the variables it looked in. The `ZenodoHTTPError` is
+  still there as `__cause__`, which is what the test asserts on. The record's
+  *metadata* stays public throughout — only the files are refused.
+- **The lifecycle test creates every new version from `v1`**, not from the
+  version it just published, which is Part 4's "any published version will do"
+  exercised as a side effect. Worth knowing: the files a version inherits come
+  from the **latest** version, not from the one named in the call — `inherit`
+  from `v1` after `v2` was published carries `v2`'s files over.
+- **Most of 12.3 was already covered** by tests written alongside the parts they
+  belong to: idempotent re-runs, `mirror_files` deletes / `upload_files` does
+  not, token precedence and `.env`, path stripping and zipping, zip determinism,
+  the metadata round-trip and a malformed document's error body, and the CLI end
+  to end. What was missing, and is now in, is the full lifecycle in one test
+  (`tests/integration/test_lifecycle_integration.py`), the restricted-access
+  path, and `create_or_get_edited_metadata_draft` being asked twice.
+- **The scheduled run is its own workflow**, matching `test-upstream-latest.yaml`
+  rather than growing `ci.yaml`, which the template owns. It runs weekly, on
+  `main` and on demand, and it **fails when the secret is missing** instead of
+  letting the whole point of the run skip in silence.
+- **`make test-integration` exists now**, sourcing `.env` if there is one, with
+  `make test-integration-read-only` for the credential-free subset.
 
 The rule: **no endpoint ships without a test that has hit the real thing.** The
 whole premise of this rewrite is that the legacy API drifted out from under us —
@@ -2550,10 +2593,9 @@ predicted held. Deltas from the text below:
   refusal is Zenodo's to make. `get_reported_errors` grew a `fields` argument so
   that "did it complain about access?" is answered by the field name rather than
   by matching on the wording.
-- **Not done: `delete_record`.** The test fixtures still delete through the
-  private `_request`, because a record can now be created through the public API
-  but not removed through it. Worth its own decision rather than a drive-by
-  addition — it is the one irreversible-ish operation the library would gain.
+- **Deletion is two methods, not one** — `delete_draft` and
+  `discard_edited_metadata_draft`, decided and built after the plan was otherwise
+  complete. See 14.7.
 
 A record is more than its files and its metadata: `access`, `pids`, `files.enabled`,
 `custom_fields` and the parent's `communities` all sit outside both. Parts 2–5
@@ -2688,6 +2730,53 @@ All three assert that access can only be set at creation, which 14.1 disproves:
   That is what makes the frame-walking `stacklevel` safe to rely on, and it fails
   if anyone reintroduces a hard-coded count.
 
+### 14.7 Deletion — two methods, because one endpoint does two things
+
+Settled after the rest of the plan was built, by asking. `create_record` shipped
+without a counterpart, so the test fixtures deleted through the private
+`_request`; the reason it was parked is that deleting is the one irreversible-ish
+operation the library would gain, and it deserved a decision rather than a
+drive-by addition.
+
+The decision turns on a fact about the API rather than a preference:
+**`DELETE /api/records/{id}/draft` does two different things**, and the request
+is byte-identical in both cases.
+
+| The record | What the `DELETE` does | Reversible? |
+|---|---|---|
+| Never published | The record and its files are gone, the ID is not reused | **No** |
+| Published, with metadata edits pending | The edits are thrown away, the published record is untouched | Yes — start them again |
+
+So the library gives each its own name, and each refuses the other's case:
+
+```python
+client.delete_draft(record_id)                   # PublishedRecordDraftError if published
+client.discard_edited_metadata_draft(record_id)  # DraftRecordDraftMetadataEditsError if not
+```
+
+- **The guards already existed**, and are the ones `get_draft` and
+  `get_edited_metadata_draft` raise. Both methods implement the guard by *calling
+  that read first* rather than reimplementing the check, which is also how an ID
+  which is not there raises `RecordNotFoundError` instead of deleting nothing
+  quietly. It costs one request; against an irreversible operation that is not a
+  cost worth arguing about.
+- **`delete_draft` refuses a published record in both of its shapes** — with and
+  without pending edits — because `get_draft` already refuses both, and the
+  second is the one which would otherwise have discarded somebody's edits under
+  the name of deleting a draft.
+- **Neither is `delete_record`**, the name this was parked under. A published
+  record cannot be removed through the API at all, so a method named for it would
+  promise something Zenodo does not offer.
+- **`_assert_writable` is deliberately not used.** `delete_draft` matches
+  `tests/test_file_write_guard.py`'s name-based rule (it starts with `delete`) but
+  is not a file write, and that guard's error — the files are locked, make a new
+  version — is the wrong advice for deleting a record. It is listed in that test's
+  `NOT_FILE_WRITES` with the reason, so the exemption is stated rather than
+  silent.
+- **The test fixtures now delete through `delete_draft`**, which is what closes
+  the gap that parked this: nothing in the suite reaches for `_request` to clean
+  up any more.
+
 ---
 
 ## Sequencing — the source of truth for what is left
@@ -2698,9 +2787,9 @@ not, and what to do next.
 
 ### Outstanding, in the order to take them
 
-| # | Work | Why it is next |
-|---|---|---|
-| **9** | **Live-API suite sweep (Part 12)** | The 12.2 endpoint matrix is already fully ticked, so what is left is the scenario tests in 12.3 and wiring up the scheduled CI run — the standing guard against Zenodo changing under us. Do it last; the CLI is now settled, so the scenarios can be written against the shipped surface. |
+Nothing. The plan is implemented, and the two questions it left open are
+resolved: deletion is built (14.7), and the docs structure is parked on purpose
+(below).
 
 ### Done
 
@@ -2716,6 +2805,8 @@ not, and what to do next.
 | 7 | Download — `download_file`, `download_files` (Part 5) | top of Part 5 |
 | 8 | CLI trimmed to three commands, legacy source and tests deleted, packaging/docs/migration guide (Parts 8–9) | tops of Parts 8 and 9 |
 | 2b | File-write guard and the read-side race fallbacks (Part 13, 13.5 steps 1–4) | top of Part 13 |
+| 9 | Live-API suite sweep — 12.3's remaining scenarios, the `zenodo_live_read` marker, `make test-integration`, the scheduled CI run (Part 12) | top of Part 12 |
+| 10 | `delete_draft` and `discard_edited_metadata_draft` | 14.7 |
 
 They were taken out of order: uploads, mirror, versions and download (Parts 2–5)
 landed before the read paths and before the metadata schema, so the transport was
@@ -2731,15 +2822,20 @@ Part 6, and step 3 then did the schema work it always did.
   ordinary accounts, and refuses it quietly, so there is no parameter for it
   (14.4).
 
-### Open, if anyone wants them
+### Waiting on something outside this repo
 
-- **`delete_record`** — a record can be created through the public API but not
-  removed through it, so the test fixtures still delete through `_request`
-  (Part 14's note). It is the one irreversible-ish operation the library would
-  gain, so it deserves its own decision rather than a drive-by addition.
 - **`skip_file_prefixes`** — replace the frame-walking `stacklevel` in
   `warn_openscm_zenodo` with the standard library's version when the supported Python
-  floor reaches 3.12.
+  floor reaches 3.12. Not a decision: `requires-python` is `>=3.10`, the argument
+  arrived in 3.12, and the trigger is written where the code is
+  (`exceptions.py`'s `_stacklevel_outside_this_package`).
+- **The docs structure** — `TODO.md` holds the one open design question, and it
+  is deliberately the user's: Zenodo is complicated enough that what it does and
+  does not support has to be explained somewhere (probably "further background"),
+  which is what would let how-to guides and tutorials stay about doing things.
+  Part 9's two parked pieces — a CLI examples page, and the embargoed-download
+  and citation-format examples — wait on that answer, since placing them first
+  would be guessing.
 
 ---
 

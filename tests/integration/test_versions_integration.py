@@ -36,9 +36,7 @@ def new_version_draft(sandbox_client):
 
     yield record_id
 
-    sandbox_client._request(
-        f"/api/records/{record_id}/draft", method="DELETE", requires_auth=True
-    )
+    sandbox_client.delete_draft(record_id)
 
 
 def test_new_version_starts_empty(sandbox_client, new_version_draft):
@@ -149,11 +147,7 @@ def test_create_new_version_start_fresh(sandbox_client, in_a_working_directory):
         assert files["fresh.txt"].md5 == get_file_md5(path)
 
     finally:
-        sandbox_client._request(
-            f"/api/records/{new_version_id}/draft",
-            method="DELETE",
-            requires_auth=True,
-        )
+        sandbox_client.delete_draft(new_version_id)
 
 
 def test_create_new_version_inherit(sandbox_client, in_a_working_directory):
@@ -178,11 +172,7 @@ def test_create_new_version_inherit(sandbox_client, in_a_working_directory):
         assert set(files) == set(previous) | {"extra.txt"}
 
     finally:
-        sandbox_client._request(
-            f"/api/records/{new_version_id}/draft",
-            method="DELETE",
-            requires_auth=True,
-        )
+        sandbox_client.delete_draft(new_version_id)
 
 
 def test_create_new_version_mirror(sandbox_client, in_a_working_directory):
@@ -204,11 +194,7 @@ def test_create_new_version_mirror(sandbox_client, in_a_working_directory):
         assert list(sandbox_client.list_files(new_version_id)) == ["only-this.txt"]
 
     finally:
-        sandbox_client._request(
-            f"/api/records/{new_version_id}/draft",
-            method="DELETE",
-            requires_auth=True,
-        )
+        sandbox_client.delete_draft(new_version_id)
 
 
 def test_create_new_version_is_re_runnable(sandbox_client, in_a_working_directory):
@@ -238,6 +224,4 @@ def test_create_new_version_is_re_runnable(sandbox_client, in_a_working_director
         assert second == first
 
     finally:
-        sandbox_client._request(
-            f"/api/records/{first}/draft", method="DELETE", requires_auth=True
-        )
+        sandbox_client.delete_draft(first)

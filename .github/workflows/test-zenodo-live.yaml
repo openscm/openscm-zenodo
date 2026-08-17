@@ -1,0 +1,51 @@
+name: Test against live Zenodo
+
+# Zenodo can change under us, as it did when the legacy `/export/bibtex`
+# endpoint quietly became a 404. This run is what turns that into a failing
+# build rather than a bug report, so it runs on a schedule as well as on `main`.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+  schedule:
+    # * is a special character in YAML so you have to quote this string
+    # This means At 04:00 on Monday.
+    # see https://crontab.guru/#0_4_*_*_1
+    - cron: '0 4 * * 1'
+
+jobs:
+  tests-live:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ "ubuntu-latest" ]
+        # One version only: these tests all write to the same sandbox account,
+        # so running them in parallel would have them fight each other.
+        python-version: [ "3.11" ]
+    runs-on: "${{ matrix.os }}"
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+      - uses: ./.github/actions/setup
+        with:
+          python-version: ${{ matrix.python-version }}
+          uv-dependency-install-flags: "--group tests --all-extras"
+      - name: Check the sandbox token is there
+        # The tests which write skip, silently, when no token resolves.
+        # Without this the whole point of the run could disappear unnoticed.
+        env:
+          ZENODO_SANDBOX_TOKEN: ${{ secrets.ZENODO_SANDBOX_TOKEN }}
+        run: |
+          if [ -z "${ZENODO_SANDBOX_TOKEN}" ]; then
+            echo "ZENODO_SANDBOX_TOKEN is not set, so the tests which write would skip" >&2
+            exit 1
+          fi
+      - name: Run the integration tests
+        env:
+          ZENODO_SANDBOX_TOKEN: ${{ secrets.ZENODO_SANDBOX_TOKEN }}
+        run: |
+          uv run --group tests pytest tests/integration -r a -v

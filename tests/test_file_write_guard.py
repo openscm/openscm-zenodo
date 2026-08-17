@@ -55,6 +55,16 @@ would call it. `test_every_file_write_method_is_covered` checks it against the
 source, so a new file-write method cannot quietly skip these tests.
 """
 
+NOT_FILE_WRITES = {"delete_draft"}
+"""
+Methods named like a file write which are not one
+
+`delete_draft` deletes the whole record, so `_assert_writable`'s error — which
+says the files are locked and to make a new version — would be the wrong advice.
+It guards with `get_draft` instead, and `tests/test_records.py` checks that it
+refuses a published record.
+"""
+
 
 @pytest.fixture
 def to_upload(tmp_path, monkeypatch):
@@ -121,7 +131,7 @@ def test_public_file_write_methods_are_guarded():
         if not name.startswith("_") and name.startswith(write_verbs)
     }
 
-    assert named_like_a_write - get_methods_which_guard() == set()
+    assert named_like_a_write - get_methods_which_guard() == NOT_FILE_WRITES
 
 
 @pytest.mark.parametrize("method", sorted(FILE_WRITE_METHODS))
