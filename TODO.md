@@ -8,3 +8,13 @@ Think through best docs to write (turns out Zenodo is kind of complicated and th
 - tutorials: learning focussed - how do I use this stuff
     - go through the whole cycle: start from nothing and end up with a published record
     - any other edge cases or other journeys that don't belong in the whole cycle picture
+
+Go through src
+
+Go through tests
+
+PR
+
+merge
+
+release
