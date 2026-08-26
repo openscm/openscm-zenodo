@@ -3172,7 +3172,11 @@ class ZenodoClient:
         ChecksumMismatchError
             `verify_checksum` is `True` and what arrived is not what was sent
         """
-        part_file = target.with_name(f"{target.name}.part")
+        part_fd, part_name = tempfile.mkstemp(
+            dir=target.parent, prefix=f"{target.name}.", suffix=".part"
+        )
+        os.close(part_fd)
+        part_file = Path(part_name)
         # MD5 because that is what Zenodo reports, not because we chose it
         hasher = hashlib.md5()  # noqa: S324
 
@@ -3238,7 +3242,13 @@ class ZenodoClient:
         dest
             Where to write the file.
 
-            A directory means "write it in here, under its own name".
+            An existing directory means "write it in here, under its own name".
+            Anything else is taken to be the path to write the file to.
+            Note that this means you need to be careful.
+            If you want `dest` to be treated as a directory, it has to exist first.
+            There is no way for us to distinguish between a directory and a filename
+            if we don't assume that all filenames end with a file extension
+            (which we don't want to do).
 
         verify_checksum
             Should we check that we received what Zenodo says it sent?
@@ -3270,6 +3280,7 @@ class ZenodoClient:
             on every attempt
         """
         target = dest / entry.filename if dest.is_dir() else dest
+        target.parent.mkdir(parents=True, exist_ok=True)
 
         if target.exists():
             if get_file_md5(target) == entry.md5:
@@ -3334,7 +3345,13 @@ class ZenodoClient:
         dest
             Where to write the file.
 
-            A directory means "write it in here, under its own name".
+            An existing directory means "write it in here, under its own name".
+            Anything else is taken to be the path to write the file to.
+            Note that this means you need to be careful.
+            If you want `dest` to be treated as a directory, it has to exist first.
+            There is no way for us to distinguish between a directory and a filename
+            if we don't assume that all filenames end with a file extension
+            (which we don't want to do).
 
         verify_checksum
             Should we check that we received what Zenodo says it sent?
@@ -5179,6 +5196,7 @@ def download_files(  # noqa: PLR0913
     verify_checksum: bool = True,
     overwrite: bool = False,
     progress: bool = True,
+    max_attempts: int = 5,
 ) -> list[Path]:
     """
     Download a record's files, in one call
@@ -5220,6 +5238,9 @@ def download_files(  # noqa: PLR0913
     progress
         Should progress bars be shown?
 
+    max_attempts
+        Maximum number of times to try each file before giving up
+
     Returns
     -------
     :
@@ -5236,6 +5257,7 @@ def download_files(  # noqa: PLR0913
         verify_checksum=verify_checksum,
         overwrite=overwrite,
         progress=progress,
+        max_attempts=max_attempts,
     )
 
 
