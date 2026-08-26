@@ -99,6 +99,16 @@ def test_download_file(fake_record, two_files, tmp_path):
     assert written.read_bytes() == two_files["a.txt"]
 
 
+def test_download_file_creates_parent_directory(fake_record, two_files, tmp_path):
+    client, _ = fake_record(two_files)
+
+    out_loc = tmp_path / "out" / "subdir" / "a_new_name.txt"
+    written = client.download_file(RECORD_ID, "a.txt", out_loc, progress=False)
+
+    assert written == out_loc
+    assert written.read_bytes() == two_files["a.txt"]
+
+
 def test_download_file_to_a_named_path(fake_record, two_files, tmp_path):
     """
     A destination which is not a directory is used as the file name
@@ -361,16 +371,6 @@ def test_download_files_mapping_unknown_name(fake_record, two_files, tmp_path):
         client.download_files(
             RECORD_ID, {"nope.txt": tmp_path / "nope.txt"}, progress=False
         )
-
-
-def test_download_files_creates_parent_directory():
-    assert False
-    # client, _ = fake_record(two_files)
-    #
-    # with pytest.raises(FileNotOnRecordError, match="nope"):
-    #     client.download_files(
-    #         RECORD_ID, {"nope.txt": tmp_path / "nope.txt"}, progress=False
-    #     )
 
 
 def test_file_not_on_record_error_lists_every_missing_name(
