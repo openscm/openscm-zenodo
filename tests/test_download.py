@@ -7,6 +7,7 @@ from __future__ import annotations
 import hashlib
 
 import pytest
+import requests.exceptions
 
 from openscm_zenodo.exceptions import ChecksumMismatchError, FileNotOnRecordError
 from openscm_zenodo.zenodo import ZenodoClient, download_files
@@ -263,6 +264,48 @@ def test_download_files_helper(fake_record, two_files, tmp_path):
     assert sorted(p.name for p in written) == ["a.txt", "b.txt"]
 
 
+@pytest.mark.parametrize(
+    "max_attempts",
+    # Keep numbers small here, backoff is a killer with more attempts
+    (1, 2),
+)
+def test_download_files_respects_max_attempts(
+    max_attempts, fake_record, two_files, tmp_path
+):
+    client, _ = fake_record(
+        # single file so number of attempts equals max attempts
+        {"a.txt": two_files["a.txt"]}
+    )
+
+    # Monkey patch in returning failures
+    request_original = client.session.request
+
+    calls = 0
+
+    def fail_to_get_files(method, url, **kwargs):
+        nonlocal calls
+        if url.endswith("content"):
+            calls = calls + 1
+
+            msg = "Fake failure"
+            raise requests.exceptions.RequestException(msg)
+
+        return request_original(method, url, **kwargs)
+
+    client.session.request = fail_to_get_files
+
+    with pytest.raises(requests.exceptions.RequestException, match="Fake failure"):
+        download_files(
+            RECORD_ID,
+            tmp_path,
+            client,
+            max_attempts=max_attempts,
+            n_threads=1,
+        )
+
+    assert calls == max_attempts
+
+
 def test_download_files_to_a_mapping_of_destinations(fake_record, two_files, tmp_path):
     """
     A mapping says exactly where each file goes, and which files are wanted
@@ -318,6 +361,16 @@ def test_download_files_mapping_unknown_name(fake_record, two_files, tmp_path):
         client.download_files(
             RECORD_ID, {"nope.txt": tmp_path / "nope.txt"}, progress=False
         )
+
+
+def test_download_files_creates_parent_directory():
+    assert False
+    # client, _ = fake_record(two_files)
+    #
+    # with pytest.raises(FileNotOnRecordError, match="nope"):
+    #     client.download_files(
+    #         RECORD_ID, {"nope.txt": tmp_path / "nope.txt"}, progress=False
+    #     )
 
 
 def test_file_not_on_record_error_lists_every_missing_name(
