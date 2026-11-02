@@ -2065,17 +2065,20 @@ class ZenodoClient:
         path = f"/api/records/{record_id}/draft/files"
         description = f"initialise {filename!r} on record {record_id!r}"
 
-        def initialise_file() -> None:
+        def initialise_file(expected_errors: Collection[int] = ()) -> None:
             self._request(
                 path,
                 method="POST",
                 requires_auth=True,
                 json=[{"key": filename}],
                 description=description,
+                expected_errors=expected_errors,
             )
 
         try:
-            initialise_file()
+            # A file which is already there is an answer we handle,
+            # so it is not logged as an error
+            initialise_file(expected_errors=(HTTP_BAD_REQUEST,))
 
         except ZenodoHTTPError as exc:
             if exc.response.status_code != HTTP_BAD_REQUEST:
@@ -2940,15 +2943,17 @@ class ZenodoClient:
             for name, entry in diff.remote.items()
             if name not in diff.to_delete
         }
+        # A file which was replaced is in both, and it is the new one we hold
+        res = {**kept, **uploaded}
 
         logger.info(
-            f"Record {record_id!r} now holds exactly {len(kept) + len(uploaded)} "
+            f"Record {record_id!r} now holds exactly {len(res)} "
             f"file(s): uploaded {len(uploaded)}, "
             f"deleted {len(diff.to_delete)}, "
             f"left {len(diff.unchanged)} unchanged"
         )
 
-        return {**kept, **uploaded}
+        return res
 
     def upload_files_as_zip(  # noqa: PLR0913
         self,

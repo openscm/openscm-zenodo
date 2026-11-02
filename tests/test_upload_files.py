@@ -418,6 +418,29 @@ def test_mirror_files_keeps_unchanged(fake_zenodo, local_files):
     assert not [method for method, _ in zenodo.calls if method in ("PUT", "DELETE")]
 
 
+def test_mirror_files_replaces_changed(fake_zenodo, local_files, log_records):
+    """
+    A file whose contents changed is replaced, and counted once
+
+    Replacing it means Zenodo first refuses the new file
+    because one with the same name is there,
+    which we handle, so it is not reported as an error.
+    """
+    client, zenodo = fake_zenodo({"a.txt": b"old contents of a"})
+
+    files = client.mirror_files(RECORD_ID, [local_files["a.txt"]], n_threads=1)
+
+    assert zenodo.files == {"a.txt": b"contents of a"}
+    assert list(files) == ["a.txt"]
+    assert files["a.txt"].md5 == md5_of(b"contents of a")
+
+    assert any(
+        message.startswith(f"Record '{RECORD_ID}' now holds exactly 1 file(s)")
+        for _, message in log_records
+    )
+    assert not [record for record in log_records if record[0] == "ERROR"]
+
+
 def test_mirror_files_empty_clears_the_draft(fake_zenodo):
     client, zenodo = fake_zenodo({"a.txt": b"a", "b.txt": b"b"})
 
