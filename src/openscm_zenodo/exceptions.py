@@ -402,7 +402,8 @@ class RecordNotWritableError(ZenodoError):
             The Zenodo domain the record is on
 
         what
-            What we were trying to write, `"files"` or `"metadata"`.
+            What we were trying to write, e.g. `"files"`, `"metadata"`
+            or `"community"`.
         """
         self.record_id = record_id
         self.zenodo_domain = zenodo_domain
@@ -417,6 +418,13 @@ class RecordNotWritableError(ZenodoError):
                 f"`{EDITED_METADATA_DRAFT_PATH}`, then update and publish those. "
                 "To release the change as a new version instead, "
                 f"use `{NEW_VERSION_PATH}`."
+            )
+
+        elif what == "community":
+            msg += (
+                "so it has no draft to select a community for. "
+                "A published record joins a community through an inclusion request, "
+                "which you can make in Zenodo's web interface."
             )
 
         else:

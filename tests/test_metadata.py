@@ -354,7 +354,10 @@ def test_validate_of_complete_metadata_is_quiet():
         pytest.param("prereserve_doi", True, "reserve_or_get_doi", id="prereserve_doi"),
         pytest.param("doi", "10.5281/zenodo.1", "pids", id="doi"),
         pytest.param(
-            "communities", [{"identifier": "zenodo"}], "not support", id="communities"
+            "communities",
+            [{"identifier": "zenodo"}],
+            "set_draft_community",
+            id="communities",
         ),
     ),
 )

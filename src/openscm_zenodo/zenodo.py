@@ -1137,6 +1137,27 @@ class Record:
         """
         return self.version.is_latest
 
+    @property
+    def community_ids(self) -> tuple[str, ...]:
+        """
+        IDs of the communities the record is in
+
+        Communities belong to the record's parent, so every version is in the
+        same ones. A community selected for a draft, or which has not yet
+        accepted the record, is not one the record is in, so it is not here:
+        see
+        [`get_draft_community`][openscm_zenodo.zenodo.ZenodoClient.get_draft_community]
+        for that.
+
+        Returns
+        -------
+        :
+            IDs (UUIDs, not slugs) of the communities
+        """
+        ids = self.raw.get("parent", {}).get("communities", {}).get("ids", [])
+
+        return tuple(str(v) for v in ids)
+
 
 RecordIDLike: TypeAlias = "str | RecordID | Record"
 """
@@ -4954,6 +4975,286 @@ class ZenodoClient:
         logger.info(f"Reserved the DOI {reserved!r} for record {record_id!r}")
 
         return reserved
+
+    def get_community_id(self, community: str) -> str:
+        """
+        Get a community's ID
+
+        Parameters
+        ----------
+        community
+            The community's slug (the part of its URL after `/communities/`,
+            e.g. `"zenodo"`) or its ID
+
+        Returns
+        -------
+        :
+            The community's ID (a UUID)
+
+        Raises
+        ------
+        ZenodoHTTPError
+            Zenodo could not find the community
+            (or it is restricted and the token cannot see it)
+        """
+        response_json = self._request(
+            f"/api/communities/{community}",
+            description=f"find the community {community!r}",
+        ).json()
+
+        return str(response_json["id"])
+
+    def _get_draft_review(self, record_id: str | RecordID) -> dict[str, Any] | None:
+        """
+        Get the review request attached to a draft
+
+        Parameters
+        ----------
+        record_id
+            ID of the record
+
+        Returns
+        -------
+        :
+            The review request, or `None` if the draft does not have one
+
+        Raises
+        ------
+        RecordNotWritableError
+            The record is published, so has no draft
+
+        RecordNotFoundError
+            There is no record with this ID
+        """
+        try:
+            return cast(
+                "dict[str, Any]",
+                self._request(
+                    f"/api/records/{record_id}/draft/review",
+                    requires_auth=True,
+                    expected_errors=(HTTP_NOT_FOUND,),
+                    description=f"read the review request of record {record_id!r}",
+                ).json(),
+            )
+
+        except ZenodoHTTPError as exc:
+            if exc.response.status_code != HTTP_NOT_FOUND:
+                raise
+
+        # A draft without a review request and a missing draft both 404,
+        # so check which this is
+        try:
+            draft = self._get_draft_document(record_id)
+        except ZenodoHTTPError as exc:
+            self._raise_for_missing_draft(exc, record_id=record_id, what="community")
+
+        if not draft.is_draft:
+            # A published record's metadata edits, which have no community flow
+            raise RecordNotWritableError(
+                str(record_id), zenodo_domain=self.zenodo_domain_url, what="community"
+            )
+
+        return None
+
+    def get_draft_community(self, record_id: RecordIDLike) -> str | None:
+        """
+        Get the community selected for a draft
+
+        This is the community chosen in the "Communities" part of Zenodo's
+        upload form. A selected community does not hold the record yet:
+        the draft has to be submitted for the community's review, see
+        [`submit_draft_for_review`][openscm_zenodo.zenodo.ZenodoClient.submit_draft_for_review].
+
+        Parameters
+        ----------
+        record_id
+            ID of the record, or the record itself
+
+        Returns
+        -------
+        :
+            ID of the selected community, or `None` if none is selected
+
+        Raises
+        ------
+        RecordNotWritableError
+            The record is published, so has no draft
+
+        RecordNotFoundError
+            There is no record with this ID
+        """
+        record_id = get_record_id(record_id)
+
+        review = self._get_draft_review(record_id)
+        if review is None:
+            return None
+
+        community_id = review.get("receiver", {}).get("community")
+
+        return None if community_id is None else str(community_id)
+
+    def set_draft_community(self, record_id: RecordIDLike, community: str) -> str:
+        """
+        Select the community for a draft
+
+        This is the same as choosing a community in Zenodo's upload form.
+        It does not submit anything:
+        the community's curators see nothing until the draft is submitted, see
+        [`submit_draft_for_review`][openscm_zenodo.zenodo.ZenodoClient.submit_draft_for_review].
+        A draft can have only one community selected,
+        so this replaces any community selected before.
+
+        Selecting the community which is already selected sends nothing,
+        so this is safe to call repeatedly.
+
+        This is only for records which have never been published.
+        A published record is added to a community through an inclusion
+        request instead, which this package does not support (yet).
+
+        Parameters
+        ----------
+        record_id
+            ID of the record, or the record itself
+
+        community
+            The community's slug (e.g. `"zenodo"`) or ID
+
+        Returns
+        -------
+        :
+            ID of the community
+
+        Raises
+        ------
+        RecordNotWritableError
+            The record is published, so has no draft
+
+        RecordNotFoundError
+            There is no record with this ID
+        """
+        record_id = get_record_id(record_id)
+        community_id = self.get_community_id(community)
+
+        if self.get_draft_community(record_id) == community_id:
+            logger.info(
+                f"Community {community!r} is already selected for record {record_id!r}"
+            )
+
+            return community_id
+
+        logger.debug(f"Selecting community {community!r} for record {record_id!r}")
+        self._request(
+            f"/api/records/{record_id}/draft/review",
+            method="PUT",
+            requires_auth=True,
+            json={
+                "receiver": {"community": community_id},
+                "type": "community-submission",
+            },
+            description=f"select community {community!r} for record {record_id!r}",
+        )
+        logger.info(f"Selected community {community!r} for record {record_id!r}")
+
+        return community_id
+
+    def remove_draft_community(self, record_id: RecordIDLike) -> None:
+        """
+        Remove the community selected for a draft
+
+        If no community is selected, nothing is sent.
+
+        Parameters
+        ----------
+        record_id
+            ID of the record, or the record itself
+
+        Raises
+        ------
+        RecordNotWritableError
+            The record is published, so has no draft
+
+        RecordNotFoundError
+            There is no record with this ID
+        """
+        record_id = get_record_id(record_id)
+
+        if self._get_draft_review(record_id) is None:
+            logger.info(f"No community is selected for record {record_id!r}")
+
+            return
+
+        self._request(
+            f"/api/records/{record_id}/draft/review",
+            method="DELETE",
+            requires_auth=True,
+            description=f"remove the community selected for record {record_id!r}",
+        )
+        logger.info(f"Removed the community selected for record {record_id!r}")
+
+    def submit_draft_for_review(
+        self, record_id: RecordIDLike, *, comment: str | None = None
+    ) -> dict[str, Any]:
+        """
+        Submit a draft for review by the community selected for it
+
+        **If the community accepts the record, it is published.**
+        Publishing cannot be undone, so the draft has to be complete
+        (files, metadata etc.) before calling this.
+        Until the community decides, the draft cannot be edited,
+        but the request can be cancelled in Zenodo's web interface.
+
+        Select the community first with
+        [`set_draft_community`][openscm_zenodo.zenodo.ZenodoClient.set_draft_community].
+
+        Parameters
+        ----------
+        record_id
+            ID of the record, or the record itself
+
+        comment
+            Message to the community's curators (may be HTML)
+
+        Returns
+        -------
+        :
+            The review request, as Zenodo describes it
+
+        Raises
+        ------
+        ZenodoError
+            No community is selected for the draft
+
+        RecordNotWritableError
+            The record is published, so has no draft
+
+        RecordNotFoundError
+            There is no record with this ID
+        """
+        record_id = get_record_id(record_id)
+
+        if self.get_draft_community(record_id) is None:
+            msg = (
+                f"No community is selected for record {record_id!r}, "
+                "so there is nobody to submit it to. "
+                "Select one first with `set_draft_community`."
+            )
+            raise ZenodoError(msg)
+
+        body = (
+            {}
+            if comment is None
+            else {"payload": {"content": comment, "format": "html"}}
+        )
+        response_json = self._request(
+            f"/api/records/{record_id}/draft/actions/submit-review",
+            method="POST",
+            requires_auth=True,
+            json=body,
+            description=f"submit record {record_id!r} for review",
+        ).json()
+        logger.info(f"Submitted record {record_id!r} for review")
+
+        return cast("dict[str, Any]", response_json)
 
     def _published_record_exists(self, record_id: str | RecordID) -> bool:
         """

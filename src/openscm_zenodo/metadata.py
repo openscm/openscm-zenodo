@@ -199,12 +199,12 @@ _LEGACY_KEYS: dict[str, str] = {
         "not in `metadata`"
     ),
     "communities": (
-        "`communities` is no longer part of the metadata, and this package does "
-        "not support setting it. On InvenioRDM, putting a record in a community "
-        "is a review request which a curator accepts, not a field you write, "
-        "so it is a different flow from everything here. Use Zenodo's web "
-        "interface to submit a record to a community; the communities a record "
-        'is already in can be read from `Record.raw["parent"]["communities"]`'
+        "`communities` is no longer part of the metadata. On InvenioRDM, putting "
+        "a record in a community is a review request which a curator accepts, "
+        "not a field you write. Select the community for a draft with "
+        "`ZenodoClient.set_draft_community`, then submit it with "
+        "`ZenodoClient.submit_draft_for_review`; the communities a record "
+        "is already in are `Record.community_ids`"
     ),
 }
 """
