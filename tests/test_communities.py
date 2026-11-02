@@ -269,3 +269,187 @@ def test_record_community_ids(parent, exp):
     )
 
     assert record.community_ids == exp
+
+
+COMMUNITIES_URL = f"{RECORD_URL}/communities"
+OTHER_SLUG = "another-community"
+OTHER_ID = "0b7c3a8e-7f8e-4c38-9a0e-7e2f0d6f3a11"
+
+
+def published_body(community_ids=()):
+    return {
+        "id": int(RECORD_ID),
+        "is_draft": False,
+        "is_published": True,
+        "parent": {"id": "1230", "communities": {"ids": list(community_ids)}},
+        "metadata": {},
+    }
+
+
+def processed_entry(community_id, status="submitted"):
+    return {
+        "community_id": community_id,
+        "request_id": f"request-{community_id}",
+        "request": {"id": f"request-{community_id}", "status": status},
+    }
+
+
+def test_request_community_inclusion(client_and_session, make_response):
+    client, session = client_and_session(
+        [
+            make_response(json_body={"id": COMMUNITY_ID}),
+            make_response(json_body=published_body()),
+            make_response(
+                json_body={"processed": [processed_entry(COMMUNITY_ID)], "errors": []}
+            ),
+        ]
+    )
+
+    res = client.request_community_inclusion(RECORD_ID, [COMMUNITY_SLUG])
+
+    assert res == [processed_entry(COMMUNITY_ID)]
+    post = session.calls[-1]
+    assert post["method"] == "POST"
+    assert post["url"] == COMMUNITIES_URL
+    assert post["json"] == {"communities": [{"id": COMMUNITY_ID}]}
+
+
+def test_request_community_inclusion_skips_communities_the_record_is_in(
+    client_and_session, make_response
+):
+    client, session = client_and_session(
+        [
+            make_response(json_body={"id": COMMUNITY_ID}),
+            make_response(json_body={"id": OTHER_ID}),
+            make_response(json_body=published_body([COMMUNITY_ID])),
+            make_response(
+                json_body={"processed": [processed_entry(OTHER_ID)], "errors": []}
+            ),
+        ]
+    )
+
+    client.request_community_inclusion(RECORD_ID, [COMMUNITY_SLUG, OTHER_SLUG])
+
+    assert session.calls[-1]["json"] == {"communities": [{"id": OTHER_ID}]}
+
+
+def test_request_community_inclusion_when_already_in_all(
+    client_and_session, make_response
+):
+    """
+    Nothing is sent, so re-running a script which got part way is safe
+    """
+    client, session = client_and_session(
+        [
+            make_response(json_body={"id": COMMUNITY_ID}),
+            make_response(json_body=published_body([COMMUNITY_ID])),
+        ]
+    )
+
+    assert client.request_community_inclusion(RECORD_ID, [COMMUNITY_SLUG]) == []
+    assert [call["method"] for call in session.calls] == ["GET", "GET"]
+
+
+def test_request_community_inclusion_raises_zenodos_errors(
+    client_and_session, make_response
+):
+    """
+    Zenodo reports what it refused in a successful response, which we raise
+    """
+    client, _ = client_and_session(
+        [
+            make_response(json_body={"id": COMMUNITY_ID}),
+            make_response(json_body=published_body()),
+            make_response(
+                json_body={
+                    "processed": [],
+                    "errors": [
+                        {
+                            "community": COMMUNITY_ID,
+                            "message": "There is already an open inclusion request",
+                        }
+                    ],
+                }
+            ),
+        ]
+    )
+
+    with pytest.raises(ZenodoError, match="already an open inclusion request"):
+        client.request_community_inclusion(RECORD_ID, [COMMUNITY_SLUG])
+
+
+def test_request_community_inclusion_of_a_draft(client_and_session, make_response):
+    client, _ = client_and_session(
+        [
+            make_response(json_body={"id": COMMUNITY_ID}),
+            make_response(status_code=404, url=RECORD_URL),
+            make_response(status_code=404, url=COMMUNITIES_URL, method="POST"),
+            make_response(json_body=draft_body(), url=DRAFT_URL),
+        ]
+    )
+
+    with pytest.raises(ZenodoError, match="set_draft_community"):
+        client.request_community_inclusion(RECORD_ID, [COMMUNITY_SLUG])
+
+
+def test_request_community_inclusion_of_a_record_which_is_not_there(
+    client_and_session, make_response
+):
+    client, _ = client_and_session(
+        [
+            make_response(json_body={"id": COMMUNITY_ID}),
+            make_response(status_code=404, url=RECORD_URL),
+            make_response(status_code=404, url=COMMUNITIES_URL, method="POST"),
+            make_response(status_code=404, url=DRAFT_URL),
+        ]
+    )
+
+    with pytest.raises(RecordNotFoundError):
+        client.request_community_inclusion(RECORD_ID, [COMMUNITY_SLUG])
+
+
+def test_remove_from_communities(client_and_session, make_response):
+    client, session = client_and_session(
+        [
+            make_response(json_body={"id": COMMUNITY_ID}),
+            make_response(json_body={"id": OTHER_ID}),
+            make_response(json_body=published_body([COMMUNITY_ID])),
+            make_response(
+                json_body={"processed": [{"community": COMMUNITY_ID}], "errors": []}
+            ),
+        ]
+    )
+
+    client.remove_from_communities(RECORD_ID, [COMMUNITY_SLUG, OTHER_SLUG])
+
+    delete = session.calls[-1]
+    assert delete["method"] == "DELETE"
+    assert delete["url"] == COMMUNITIES_URL
+    # Only the community the record is in
+    assert delete["json"] == {"communities": [{"id": COMMUNITY_ID}]}
+
+
+def test_remove_from_communities_when_in_none(client_and_session, make_response):
+    client, session = client_and_session(
+        [
+            make_response(json_body={"id": COMMUNITY_ID}),
+            make_response(json_body=published_body()),
+        ]
+    )
+
+    assert client.remove_from_communities(RECORD_ID, [COMMUNITY_SLUG]) == []
+    assert [call["method"] for call in session.calls] == ["GET", "GET"]
+
+
+def test_remove_from_communities_of_a_record_which_is_not_published(
+    client_and_session, make_response
+):
+    client, _ = client_and_session(
+        [
+            make_response(json_body={"id": COMMUNITY_ID}),
+            make_response(status_code=404, url=RECORD_URL),
+        ]
+    )
+
+    with pytest.raises(RecordNotFoundError):
+        client.remove_from_communities(RECORD_ID, [COMMUNITY_SLUG])

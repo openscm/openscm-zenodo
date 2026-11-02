@@ -424,7 +424,7 @@ class RecordNotWritableError(ZenodoError):
             msg += (
                 "so it has no draft to select a community for. "
                 "A published record joins a community through an inclusion request, "
-                "which you can make in Zenodo's web interface."
+                "see `ZenodoClient.request_community_inclusion`."
             )
 
         else:

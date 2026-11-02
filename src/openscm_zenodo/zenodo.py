@@ -5109,7 +5109,8 @@ class ZenodoClient:
 
         This is only for records which have never been published.
         A published record is added to a community through an inclusion
-        request instead, which this package does not support (yet).
+        request instead, see
+        [`request_community_inclusion`][openscm_zenodo.zenodo.ZenodoClient.request_community_inclusion].
 
         Parameters
         ----------
@@ -5255,6 +5256,287 @@ class ZenodoClient:
         logger.info(f"Submitted record {record_id!r} for review")
 
         return cast("dict[str, Any]", response_json)
+
+    def _send_community_changes(
+        self,
+        record_id: RecordID,
+        community_ids: Collection[str],
+        *,
+        method: str,
+        description: str,
+    ) -> list[dict[str, Any]]:
+        """
+        Send a change to the communities a published record is in
+
+        Zenodo answers with what it processed and what it did not,
+        and reports the latter as errors in an otherwise successful response,
+        so we raise if there are any.
+
+        Parameters
+        ----------
+        record_id
+            ID of the record
+
+        community_ids
+            IDs of the communities to change
+
+        method
+            `"POST"` to request inclusion, `"DELETE"` to remove
+
+        description
+            Description of the change, for messages
+
+        Returns
+        -------
+        :
+            What Zenodo processed, one entry per community
+
+        Raises
+        ------
+        ZenodoError
+            Zenodo did not process the change for some of the communities
+        """
+        try:
+            response_json = self._request(
+                f"/api/records/{record_id}/communities",
+                method=method,
+                requires_auth=True,
+                json={"communities": [{"id": c} for c in community_ids]},
+                description=description,
+            ).json()
+
+        except ZenodoHTTPError as exc:
+            if exc.response.status_code != HTTP_NOT_FOUND:
+                raise
+
+            if self._get_draft_or_none(record_id) is not None:
+                msg = (
+                    f"Record {record_id!r} on {self.zenodo_domain_url} "
+                    "has never been published, so it cannot join a community "
+                    "through an inclusion request. Select the community for "
+                    "the draft with `set_draft_community` instead."
+                )
+                raise ZenodoError(msg) from exc
+
+            raise RecordNotFoundError(
+                str(record_id),
+                zenodo_domain=self.zenodo_domain_url,
+                token_source=self.token_source,
+            ) from exc
+
+        errors = response_json.get("errors") or []
+        if errors:
+            msg = (
+                f"Zenodo could not {description} for every community. "
+                f"Errors: {errors}. "
+                f"Processed: {response_json.get('processed')}"
+            )
+            raise ZenodoError(msg)
+
+        return cast("list[dict[str, Any]]", response_json.get("processed") or [])
+
+    def _get_published_community_ids_or_none(
+        self, record_id: RecordID
+    ) -> set[str] | None:
+        """
+        Get the communities a published record is in
+
+        Parameters
+        ----------
+        record_id
+            ID of the record
+
+        Returns
+        -------
+        :
+            IDs of the communities, or `None` if there is no published record
+        """
+        try:
+            return set(
+                self.get_published(
+                    record_id, expected_errors=(HTTP_NOT_FOUND,)
+                ).community_ids
+            )
+        except ZenodoHTTPError as exc:
+            if exc.response.status_code != HTTP_NOT_FOUND:
+                raise
+
+            return None
+
+    def _get_draft_or_none(self, record_id: str | RecordID) -> Record | None:
+        """
+        Get a record's draft, or `None` if there is no draft we can see
+
+        Parameters
+        ----------
+        record_id
+            ID of the record
+
+        Returns
+        -------
+        :
+            The draft, or `None`
+        """
+        try:
+            return self._get_draft_document(
+                record_id, expected_errors=(HTTP_NOT_FOUND,)
+            )
+        except ZenodoHTTPError as exc:
+            if exc.response.status_code != HTTP_NOT_FOUND:
+                raise
+
+            return None
+
+    def request_community_inclusion(
+        self, record_id: RecordIDLike, communities: Collection[str]
+    ) -> list[dict[str, Any]]:
+        """
+        Request that a published record be included in communities
+
+        This makes one inclusion request per community,
+        which the community's curators then accept or decline.
+        Depending on the community's settings and your role in it,
+        Zenodo may include the record straight away instead.
+        Either way, what happened is in the returned requests' `status`.
+
+        Communities belong to the record's parent,
+        so all of the record's versions are included.
+
+        Communities the record is already in are skipped,
+        so this is safe to call repeatedly.
+        A community which already has an open request for the record
+        is not skipped (Zenodo does not say so on the record),
+        and Zenodo refuses the second request, which we raise.
+
+        For a record which has never been published, use
+        [`set_draft_community`][openscm_zenodo.zenodo.ZenodoClient.set_draft_community]
+        and
+        [`submit_draft_for_review`][openscm_zenodo.zenodo.ZenodoClient.submit_draft_for_review]
+        instead.
+
+        Parameters
+        ----------
+        record_id
+            ID of the record, or the record itself
+
+        communities
+            Slugs (e.g. `"zenodo"`) or IDs of the communities
+
+        Returns
+        -------
+        :
+            What Zenodo did for each community it was asked about,
+            including the request it made (under `"request"`).
+            Empty if the record is already in all of the communities.
+
+        Raises
+        ------
+        ZenodoError
+            The record has never been published,
+            or Zenodo did not make the request for some of the communities
+
+        RecordNotFoundError
+            There is no record with this ID
+        """
+        record_id = get_record_id(record_id)
+        community_ids = {c: self.get_community_id(c) for c in communities}
+
+        already_in = self._get_published_community_ids_or_none(record_id)
+        if already_in is None:
+            # Let the request below explain (a draft, or nothing there at all)
+            already_in = set()
+
+        to_request = {
+            c: cid for c, cid in community_ids.items() if cid not in already_in
+        }
+        for c in community_ids.keys() - to_request.keys():
+            logger.info(f"Record {record_id!r} is already in community {c!r}")
+
+        if not to_request:
+            return []
+
+        processed = self._send_community_changes(
+            record_id,
+            list(to_request.values()),
+            method="POST",
+            description=(
+                f"request the inclusion of record {record_id!r} "
+                f"in communities {sorted(to_request)}"
+            ),
+        )
+        for entry in processed:
+            status = entry.get("request", {}).get("status")
+            logger.info(
+                f"Requested the inclusion of record {record_id!r} "
+                f"in community {entry.get('community_id')!r} (status: {status!r})"
+            )
+
+        return processed
+
+    def remove_from_communities(
+        self, record_id: RecordIDLike, communities: Collection[str]
+    ) -> list[dict[str, Any]]:
+        """
+        Remove a published record from communities
+
+        Communities the record is not in are skipped,
+        so this is safe to call repeatedly.
+        This does not cancel open inclusion requests:
+        do that in Zenodo's web interface.
+
+        Parameters
+        ----------
+        record_id
+            ID of the record, or the record itself
+
+        communities
+            Slugs (e.g. `"zenodo"`) or IDs of the communities
+
+        Returns
+        -------
+        :
+            What Zenodo did for each community it was asked about.
+            Empty if the record is in none of the communities.
+
+        Raises
+        ------
+        ZenodoError
+            Zenodo did not remove the record from some of the communities
+            (e.g. you may not)
+
+        RecordNotFoundError
+            There is no published record with this ID
+        """
+        record_id = get_record_id(record_id)
+        community_ids = {c: self.get_community_id(c) for c in communities}
+        already_in = self._get_published_community_ids_or_none(record_id)
+        if already_in is None:
+            raise RecordNotFoundError(
+                str(record_id),
+                zenodo_domain=self.zenodo_domain_url,
+                token_source=self.token_source,
+            )
+
+        to_remove = {c: cid for c, cid in community_ids.items() if cid in already_in}
+        for c in community_ids.keys() - to_remove.keys():
+            logger.info(f"Record {record_id!r} is not in community {c!r}")
+
+        if not to_remove:
+            return []
+
+        processed = self._send_community_changes(
+            record_id,
+            list(to_remove.values()),
+            method="DELETE",
+            description=(
+                f"remove record {record_id!r} from communities {sorted(to_remove)}"
+            ),
+        )
+        logger.info(
+            f"Removed record {record_id!r} from communities {sorted(to_remove)}"
+        )
+
+        return processed
 
     def _published_record_exists(self, record_id: str | RecordID) -> bool:
         """
